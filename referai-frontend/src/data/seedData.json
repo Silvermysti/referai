@@ -3,7 +3,7 @@
     "id": "cand_01",
     "full_name": "Meera Karan",
     "anonymous_id": "Candidate Alpha",
-    "current_role": "Pre-Final Year Engineering Student (IIT Madras Affiliate)",
+    "current_role": "Early-career Backend Engineer (IIT Madras Affiliate)",
     "target_company": "Stripe",
     "target_role": "Backend Performance Engineer",
     "growth_velocity_score": 96,
@@ -40,26 +40,26 @@
     "id": "cand_02",
     "full_name": "Vikramaditya Rao",
     "anonymous_id": "Candidate Beta",
-    "current_role": "Systems Intern at IISc Bengaluru",
+    "current_role": "Data Analyst Intern at IISc Bengaluru",
     "target_company": "Netflix",
-    "target_role": "Core Infrastructure Engineer",
+    "target_role": "Data Analyst",
     "growth_velocity_score": 98,
     "culture_alignment_score": 89,
     "network_trust_coefficient": 9.7,
     "skills_matrix": [
-      { "name": "eBPF Linux Kernel Observability", "status": "VERIFIED", "proof_of_work": "Authored custom eBPF probes tracking network packet latency at the socket layer." },
-      { "name": "C++ Concurrent Memory Models", "status": "VERIFIED", "proof_of_work": "Designed a lock-free ring buffer queue achieving sub-microsecond serialization." },
-      { "name": "Distributed Stream Processing", "status": "MISSING", "proof_of_work": "Requires completion of Micro-Challenge: Optimize low-latency cluster aggregation via Apache Flink." }
+      { "name": "SQL", "status": "VERIFIED", "proof_of_work": "Built cohort and funnel analysis queries over product events." },
+      { "name": "Tableau", "status": "VERIFIED", "proof_of_work": "Published an executive dashboard for weekly hiring funnel health." },
+      { "name": "Statistics", "status": "MISSING", "proof_of_work": "Requires completion of Micro-Challenge: Design an A/B test readout for recruiter response-rate changes." }
     ],
     "alumni_referral_paths": [
       {
         "alumnus_name": "Siddharth Verma",
-        "alumnus_role": "Principal Infrastructure Lead",
+        "alumnus_role": "People Analytics Lead",
         "alumnus_company": "Netflix",
         "ghosting_risk": "Low",
         "response_probability": 91,
         "vouch_tier": "Tier 1 (High Conversion)",
-        "shared_affinity_context": "Won the VØID hackathon grand prize together as teammates back in 2023."
+        "shared_affinity_context": "Worked on hiring analytics and funnel health projects in 2023."
       }
     ]
   },
@@ -94,7 +94,7 @@
     "id": "cand_04",
     "full_name": "Rohan Deshmukh",
     "anonymous_id": "Candidate Delta",
-    "current_role": "Distributed Systems Graduate Student (BITS Pilani)",
+    "current_role": "Distributed Systems Engineer (BITS Pilani)",
     "target_company": "Snowflake",
     "target_role": "Database Engine Engineer",
     "growth_velocity_score": 94,

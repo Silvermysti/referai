@@ -2,30 +2,208 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #111827;
+  background: #f6f7fb;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-soft: #f1f5f9;
+  --surface-strong: #e2e8f0;
+  --text: #111827;
+  --muted: #64748b;
+  --faint: #94a3b8;
+  --border: #e2e8f0;
+  --primary: #2155d9;
+  --primary-strong: #173fbd;
+  --accent: #06a77d;
+  --warning: #b7791f;
+  --shadow: 0 18px 50px rgb(15 23 42 / 0.08);
+}
+
+.dark {
+  color: #f8fafc;
+  background: #080b12;
+  --bg: #080b12;
+  --surface: #101622;
+  --surface-soft: #151e2e;
+  --surface-strong: #263247;
+  --text: #f8fafc;
+  --muted: #a7b1c2;
+  --faint: #748094;
+  --border: #253044;
+  --primary: #7aa2ff;
+  --primary-strong: #a8c0ff;
+  --accent: #4bd6ae;
+  --warning: #f5c16c;
+  --shadow: 0 18px 50px rgb(0 0 0 / 0.3);
+}
+
+* {
+  box-sizing: border-box;
+}
+
 body {
-  background: linear-gradient(135deg, #090D16 0%, #0B0F19 100%);
-  color: white;
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  margin: 0;
+  min-width: 320px;
+  background: var(--bg);
+  color: var(--text);
 }
 
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-  }
-  to {
-    opacity: 1;
-  }
+button,
+input,
+textarea,
+select {
+  font: inherit;
 }
 
-.animate-fade-in {
-  animation: fadeIn 0.3s ease-out;
+button {
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: not-allowed;
+}
+
+.page-bg {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgb(33 85 217 / 0.12), transparent 32rem),
+    linear-gradient(180deg, var(--bg), var(--bg));
+  color: var(--text);
+}
+
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.surface-flat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.soft {
+  background: var(--surface-soft);
+}
+
+.text-main {
+  color: var(--text);
+}
+
+.text-muted {
+  color: var(--muted);
+}
+
+.text-faint {
+  color: var(--faint);
+}
+
+.border-app {
+  border-color: var(--border);
+}
+
+.btn-primary {
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 800;
+  transition: transform 150ms ease, opacity 150ms ease;
+}
+
+.btn-primary:hover {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 800;
+  transition: background 150ms ease, transform 150ms ease;
+}
+
+.btn-secondary:hover {
+  background: var(--surface-soft);
+  transform: translateY(-1px);
+}
+
+.field {
+  min-height: 44px;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  padding: 0.75rem 0.9rem;
+  outline: none;
+}
+
+.field:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgb(33 85 217 / 0.16);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.25rem 0.65rem;
+  font-size: 0.75rem;
+  font-weight: 800;
+}
+
+.badge-blue {
+  background: rgb(33 85 217 / 0.12);
+  color: var(--primary-strong);
+}
+
+.badge-green {
+  background: rgb(6 167 125 / 0.14);
+  color: var(--accent);
+}
+
+.badge-amber {
+  background: rgb(183 121 31 / 0.14);
+  color: var(--warning);
+}
+
+.metric-card,
+.app-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04);
+}
+
+.metric-card {
+  min-height: 104px;
+  padding: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.empty-state {
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
 }
 
 @keyframes slideInUp {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
@@ -34,26 +212,5 @@ body {
 }
 
 .animate-slide-in-up {
-  animation: slideInUp 0.4s ease-out;
-}
-
-/* Design Token Utilities */
-.bg-canvas {
-  @apply bg-[#090D16];
-}
-
-.bg-card-surface {
-  @apply bg-[#111827];
-}
-
-.text-muted-primary {
-  @apply text-[#64748B];
-}
-
-.text-muted-secondary {
-  @apply text-[#94A3B8];
-}
-
-.text-brand-blue {
-  @apply text-[#2563EB];
+  animation: slideInUp 0.32s ease-out;
 }

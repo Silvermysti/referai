@@ -1,279 +1,241 @@
-import { useState } from "react";
-import seedData from "../data/seedData.json";
-import IntakeEngine from "../components/IntakeEngine";
-import CandidateMatch from "../components/CandidateMatch";
-import ProofOfWorkChallenge from "../components/ProofOfWorkChallenge";
-import DEIToggle from "../components/DEIToggle";
-import RankElevationNotification from "../components/RankElevationNotification";
-import NetworkGraph from "../components/NetworkGraph";
-import WarmIntroModule from "../components/WarmIntroModule";
-import AIValidationSummary from "../components/AIValidationSummary";
-import AnimatedScoreUpdate from "../components/AnimatedScoreUpdate";
-import SkillGapDiff from "../components/SkillGapDiff";
-import EquityScorePanel from "../components/EquityScorePanel";
-import ReferralUnlockSystem from "../components/ReferralUnlockSystem";
+import { useMemo, useState } from "react";
+import { markRecruiterReferral, sourceRecruiterProfiles } from "../services/api";
 
 const Recruiter = () => {
-  // Pipeline state machine
-  const [pipelineStep, setPipelineStep] = useState(0); // 0: Intake, 1: Matching, 2: PoW, 3: Judge, 4: Graph, 5: Vouch
-  const [isDeiActive, setIsDeiActive] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isJudgeActive, setIsJudgeActive] = useState(false);
-  const [showNotification, setShowNotification] = useState(false);
-  const [updateTrustScore, setUpdateTrustScore] = useState(false);
-  const [isProofCompleted, setIsProofCompleted] = useState(false);
+  const [jobUrl, setJobUrl] = useState("");
+  const [job, setJob] = useState(null);
+  const [matches, setMatches] = useState([]);
+  const [notice, setNotice] = useState("");
+  const [selectedId, setSelectedId] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [referringId, setReferringId] = useState("");
+  const [error, setError] = useState("");
 
-  // candidate data
-  const topCandidate = seedData[0]; // Aishwarya Mol S
-  const primaryAlumnus = topCandidate.alumni_referral_paths[0];
-  const [trustScore, setTrustScore] = useState(topCandidate.network_trust_coefficient);
+  const selected = useMemo(
+    () => matches.find((match) => match.id === selectedId) || matches[0],
+    [matches, selectedId],
+  );
 
-  // Job requirements for skill matching
-  const jobSkills = [
-    "Distributed Systems Design",
-    "FastAPI & Async IO",
-    "Redis Caching",
-    "Idempotent API Architecture",
-    "Load Balancing",
-    "API Security",
-    "PostgreSQL",
-    "Docker & Kubernetes"
-  ];
-
-  const candidateSkills = topCandidate.technical_skills || [
-    "Distributed Systems",
-    "FastAPI",
-    "Redis",
-    "API Design",
-    "Python",
-    "Docker",
-    "Cloud Infrastructure"
-  ];
-
-  // Phase 1: Intake analysis
-  const handleAnalyze = () => {
-    setIsProcessing(true);
-    setTimeout(() => {
-      setIsProcessing(false);
-      setPipelineStep(1);
-    }, 1200);
+  const searchProfiles = async () => {
+    if (!jobUrl.trim()) {
+      setError("Paste a job link or role before sourcing profiles.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setNotice("");
+    try {
+      const data = await sourceRecruiterProfiles({ jobUrl });
+      setJob(data.job);
+      setMatches(data.matches || []);
+      setSelectedId(data.matches?.[0]?.id || "");
+      setNotice(data.notice || "");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Phase 3: Submit proof of work
-  const handleProofSubmit = () => {
-    setIsJudgeActive(true);
-    setIsProofCompleted(true);
+  const markReferred = async (profile) => {
+    if (!job || !profile) return;
+    setReferringId(profile.id);
+    setError("");
+    try {
+      await markRecruiterReferral({ job, profile });
+      setMatches((current) =>
+        current.map((item) => (item.id === profile.id ? { ...item, status: "Shortlisted" } : item)),
+      );
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setReferringId("");
+    }
+  };
 
-    // 400ms loading flicker
-    setTimeout(() => {
-      // 600ms score animation
-      setUpdateTrustScore(true);
-      
-      // Update trust score
-      setTimeout(() => {
-        setTrustScore(9.2);
-      }, 100);
-
-      // Show rank elevation notification
-      setTimeout(() => {
-        setShowNotification(true);
-      }, 300);
-
-      // Progress to graph
-      setTimeout(() => {
-        setIsJudgeActive(false);
-        setPipelineStep(4); // Skip to graph
-      }, 600);
-
-      // Show validation summary
-      setTimeout(() => {
-        setPipelineStep(5);
-      }, 1200);
-    }, 400);
+  const openProfile = (url) => {
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   return (
-    <div className="w-full min-h-screen bg-canvas" style={{ backgroundColor: "#090D16" }}>
-      {/* DEI Toggle - Sticky Header */}
-      <DEIToggle isDeiActive={isDeiActive} onToggle={() => setIsDeiActive(!isDeiActive)} />
-
-      {/* Main Content Container */}
-      <div className="max-w-3xl mx-auto px-6 py-8">
-        {/* System Header */}
-        <div className="mb-12">
-          <h1 className="text-4xl font-bold tracking-tight text-white mb-2">Network Equity Engine</h1>
-          <p className="text-muted-secondary">Institutional Talent Intelligence Pipeline</p>
-          
-          {/* System Stats */}
-          <div className="grid grid-cols-4 gap-4 mt-8">
-            <div className="bg-card-surface bg-opacity-70 backdrop-blur-md rounded-lg p-4" style={{ border: "1px solid rgba(226, 232, 240, 0.06)" }}>
-              <p className="text-xs text-muted-secondary mb-2">Pipeline Step</p>
-              <p className="text-lg font-bold text-brand-blue">{pipelineStep + 1} / 6</p>
-            </div>
-            
-            <div className="bg-card-surface bg-opacity-70 backdrop-blur-md rounded-lg p-4" style={{ border: "1px solid rgba(226, 232, 240, 0.06)" }}>
-              <p className="text-xs text-muted-secondary mb-2">Candidates</p>
-              <p className="text-lg font-bold text-white">{seedData.length}</p>
-            </div>
-            
-            <div className="bg-card-surface bg-opacity-70 backdrop-blur-md rounded-lg p-4" style={{ border: "1px solid rgba(226, 232, 240, 0.06)" }}>
-              <p className="text-xs text-muted-secondary mb-2">Top Candidate Trust</p>
-              <p className="text-lg font-bold text-white">
-                {updateTrustScore ? (
-                  <AnimatedScoreUpdate 
-                    initialScore={topCandidate.network_trust_coefficient} 
-                    finalScore={9.2} 
-                    duration={600} 
-                  />
-                ) : (
-                  topCandidate.network_trust_coefficient
-                )}
-              </p>
-            </div>
-            
-            <div className="bg-card-surface bg-opacity-70 backdrop-blur-md rounded-lg p-4" style={{ border: "1px solid rgba(226, 232, 240, 0.06)" }}>
-              <p className="text-xs text-muted-secondary mb-2">DEI Mode</p>
-              <p className={`text-lg font-bold ${isDeiActive ? "text-purple-400" : "text-muted-secondary"}`}>
-                {isDeiActive ? "ACTIVE" : "OFF"}
-              </p>
-            </div>
-          </div>
+    <div className="mx-auto max-w-7xl px-4 py-8 md:px-8">
+      <div className="mb-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.75fr)]">
+        <div>
+          <h2 className="text-3xl font-black tracking-tight text-main md:text-5xl">Recruiter sourcing.</h2>
+          <p className="mt-4 max-w-2xl text-base leading-7 text-muted">
+            Paste a job link or role. ReferAI finds public candidate profiles with similar skills, location, and career stage, then ranks the best matches.
+          </p>
         </div>
 
-        {/* PHASE 1: Intake Engine */}
-        {pipelineStep >= 0 && (
-          <IntakeEngine 
-            onAnalyze={handleAnalyze} 
-            isProcessing={isProcessing} 
-          />
-        )}
-
-        {/* PHASE 2: Candidate Matching */}
-        {pipelineStep >= 1 && (
-          <div className="mb-12">
-            <div className="mb-6">
-              <h2 className="text-2xl font-semibold tracking-tight text-white mb-2">Phase 2: Pipeline Manifestation & Core Matches</h2>
-              <p className="text-muted-secondary text-sm">Top candidate identified from alumni network</p>
-            </div>
-
-            <CandidateMatch 
-              candidate={topCandidate} 
-              isTopCandidate={true} 
-              isDeiActive={isDeiActive}
+        <div className="surface-flat p-5">
+          <label className="text-sm font-black text-main" htmlFor="recruiter-job-url">
+            Job link or role
+          </label>
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+            <input
+              id="recruiter-job-url"
+              value={jobUrl}
+              onChange={(event) => setJobUrl(event.target.value)}
+              className="field"
+              placeholder="LinkedIn job URL or Data Analyst at Netflix"
             />
-
-            {/* Secondary candidates grid */}
-            <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-4">
-              {seedData.slice(1, 3).map((candidate, idx) => (
-                <CandidateMatch
-                  key={idx}
-                  candidate={candidate}
-                  isTopCandidate={false}
-                  isDeiActive={isDeiActive}
-                />
-              ))}
-            </div>
-
-            {/* Skill Gap Analysis */}
-            <div className="mt-12 mb-8">
-              <h3 className="text-xl font-semibold tracking-tight text-white mb-4">Skill Alignment Analysis</h3>
-              <SkillGapDiff
-                jobSkills={jobSkills}
-                candidateSkills={candidateSkills}
-                jobTitle="Backend Performance Engineer @ Stripe"
-              />
-            </div>
-
-            <button
-              onClick={() => setPipelineStep(2)}
-              className="w-full mt-8 py-3 px-4 bg-card-surface bg-opacity-70 backdrop-blur-md text-white rounded-lg font-semibold text-sm hover:bg-opacity-100 transition-all"
-              style={{ border: "1px solid rgba(226, 232, 240, 0.06)" }}
-            >
-              Proceed to Proof-of-Work Challenge →
+            <button onClick={searchProfiles} disabled={loading} className="btn-primary min-h-11 px-5 text-sm">
+              {loading ? "Sourcing" : "Find matches"}
             </button>
           </div>
-        )}
-
-        {/* PHASE 3: Proof of Work */}
-        {pipelineStep >= 2 && (
-          <ProofOfWorkChallenge 
-            candidate={topCandidate} 
-            onSubmit={handleProofSubmit}
-            isJudgeActive={isJudgeActive}
-          />
-        )}
-
-        {/* PHASE 4 & 5: Judge Execution & Results */}
-        {pipelineStep >= 4 && (
-          <>
-            {/* Rank Elevation Notification */}
-            <RankElevationNotification 
-              isVisible={showNotification} 
-              fromRank={4} 
-              toRank={1}
-            />
-
-            {/* Network Graph */}
-            <NetworkGraph 
-              candidate={topCandidate} 
-              alumnus={primaryAlumnus}
-              isVisible={pipelineStep >= 4}
-            />
-
-            {/* Equity Score Panel */}
-            <div className="mb-8">
-              <EquityScorePanel
-                trustScore={trustScore}
-                skillMatch={75}
-                networkScore={88}
-                isDeiActive={isDeiActive}
-              />
-            </div>
-
-            {/* Referral Unlock System - Wraps WarmIntroModule */}
-            <ReferralUnlockSystem
-              isProofCompleted={isProofCompleted}
-              candidate={topCandidate}
-              alumnus={primaryAlumnus}
-              trustScore={trustScore}
-              isDeiActive={isDeiActive}
-            />
-
-            {/* AI Validation Summary */}
-            <AIValidationSummary 
-              isVisible={pipelineStep >= 5}
-              trustScore={trustScore}
-            />
-
-            {/* Final CTA */}
-            <div className="mt-12 bg-card-surface bg-opacity-70 backdrop-blur-md rounded-lg p-8 text-center" style={{ border: "1px solid rgba(79, 70, 229, 0.2)" }}>
-              <h3 className="text-xl font-semibold text-white mb-2">Pipeline Execution Complete</h3>
-              <p className="text-muted-secondary text-sm mb-6">
-                Candidate has been verified and is ready for warm introduction
-              </p>
-              <button 
-                onClick={() => alert("Referral initiated! Candidate will receive introduction email.")} 
-                className="px-6 py-3 bg-gradient-to-r from-blue-500 to-purple-600 text-white rounded-lg font-semibold text-sm hover:opacity-90 transition-all cursor-pointer"
-              >
-                Initiate Referral Process
-              </button>
-
-              <button
-                onClick={() => {
-                  setPipelineStep(0);
-                  setShowNotification(false);
-                  setUpdateTrustScore(false);
-                  setIsProofCompleted(false);
-                  setTrustScore(topCandidate.network_trust_coefficient);
-                }}
-                className="ml-3 px-6 py-3 bg-slate-700 text-white rounded-lg font-semibold text-sm hover:bg-slate-600 transition-all"
-              >
-                Reset Pipeline
-              </button>
-            </div>
-          </>
-        )}
+          {error && <p className="mt-3 text-sm font-bold text-rose-600">{error}</p>}
+        </div>
       </div>
+
+      {job && (
+        <section className="surface-flat mb-6 p-5">
+          <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
+            <div>
+              <p className="text-sm font-black uppercase tracking-wide text-muted">Open role</p>
+              <h3 className="mt-1 text-2xl font-black text-main">
+                {job.role} at {job.company}
+              </h3>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-muted">{job.description}</p>
+              {notice && <p className="mt-3 text-xs font-bold text-muted">{notice}</p>}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {job.skills?.map((skill) => (
+                <span key={skill} className="badge badge-blue">{skill}</span>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
+
+      {matches.length > 0 ? (
+        <section className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
+          <div className="space-y-3">
+            {matches.map((profile) => (
+              <button
+                key={profile.id}
+                onClick={() => setSelectedId(profile.id)}
+                className={`surface-flat w-full p-5 text-left transition hover:-translate-y-0.5 ${
+                  selected?.id === profile.id ? "ring-2 ring-[var(--primary)]" : ""
+                }`}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex min-w-0 gap-3">
+                    <img
+                      src={profile.profile_image_url}
+                      alt=""
+                      className="h-12 w-12 shrink-0 rounded-full object-cover"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-black uppercase tracking-wide text-muted">Rank #{profile.rank}</p>
+                      <h3 className="mt-1 truncate text-lg font-black text-main">{profile.name}</h3>
+                      <p className="mt-1 text-sm leading-6 text-muted">{profile.headline}</p>
+                      <p className="mt-1 text-xs font-bold text-muted">
+                        @{profile.linkedin_handle} · {profile.location}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-[rgb(33_85_217_/_0.12)] px-3 py-2 text-center">
+                    <p className="text-xs font-bold text-[var(--primary)]">Match</p>
+                    <p className="text-2xl font-black text-[var(--primary-strong)]">{profile.match_score}%</p>
+                  </div>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <span className={profile.status === "Shortlisted" ? "badge badge-green" : "badge badge-amber"}>
+                    {profile.status}
+                  </span>
+                  {profile.match_reasons?.slice(0, 2).map((reason) => (
+                    <span key={reason} className="badge badge-blue">{reason}</span>
+                  ))}
+                  {profile.skills?.slice(0, 3).map((skill) => (
+                    <span key={skill} className="badge badge-green">{skill}</span>
+                  ))}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {selected && (
+            <div className="space-y-6">
+              <div className="surface-flat p-5">
+                <div className="flex flex-col justify-between gap-4 md:flex-row md:items-start">
+                  <div className="flex gap-4">
+                    <img
+                      src={selected.profile_image_url}
+                      alt=""
+                      className="h-16 w-16 shrink-0 rounded-full object-cover"
+                    />
+                    <div>
+                      <p className="text-sm font-black uppercase tracking-wide text-muted">Best match details</p>
+                      <h3 className="mt-1 text-2xl font-black text-main">{selected.name}</h3>
+                      <p className="mt-1 text-sm leading-6 text-muted">{selected.headline}</p>
+                      <p className="mt-1 text-xs font-bold text-muted">
+                        @{selected.linkedin_handle} · {selected.location}
+                      </p>
+                      <p className="mt-3 text-sm leading-6 text-muted">{selected.summary}</p>
+                      <p className="mt-2 text-xs font-bold text-muted">{selected.source}</p>
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-app px-4 py-3 text-center">
+                    <p className="text-xs font-bold text-muted">Match</p>
+                    <p className="text-3xl font-black text-main">{selected.match_score}%</p>
+                  </div>
+                </div>
+
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {selected.skills?.map((skill) => (
+                    <span key={skill} className="badge badge-green">{skill}</span>
+                  ))}
+                </div>
+
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {selected.match_reasons?.map((reason) => (
+                    <div key={reason} className="rounded-lg soft p-3 text-sm font-bold leading-6 text-main">
+                      {reason}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="surface-flat p-5">
+                <p className="text-sm font-black uppercase tracking-wide text-muted">Fit rationale</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-muted">
+                  {selected.fit_reason || selected.llm_reason}
+                </p>
+              </div>
+
+              <div className="surface-flat p-5">
+                <p className="text-sm font-black uppercase tracking-wide text-muted">Pipeline status</p>
+                <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                  <button onClick={() => openProfile(selected.linkedin_url)} className="btn-secondary px-4 py-3 text-sm">
+                    Open profile
+                  </button>
+                  <button
+                    onClick={() => markReferred(selected)}
+                    disabled={selected.status === "Shortlisted" || referringId === selected.id}
+                    className="btn-primary px-4 py-3 text-sm"
+                  >
+                    {selected.status === "Shortlisted" ? "Shortlisted" : referringId === selected.id ? "Saving" : "Add to shortlist"}
+                  </button>
+                </div>
+                <p className="mt-3 text-sm font-bold text-muted">
+                  Current status: <span className="text-main">{selected.status}</span>
+                </p>
+              </div>
+            </div>
+          )}
+        </section>
+      ) : (
+        <div className="surface-flat empty-state">
+          <div>
+            <p className="text-lg font-black text-main">{job ? "No public candidate profiles found" : "No recruiter search yet"}</p>
+            <p className="mt-2 max-w-md text-sm leading-6 text-muted">
+              {job
+                ? "Try a richer job link or include the role, skills, and location so ReferAI can find actual public LinkedIn profile results."
+                : "Add a job link to source and rate the top public profiles for that role."}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

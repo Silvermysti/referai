@@ -11,6 +11,10 @@ const NetworkGraph = ({ candidate, alumnus, isVisible }) => {
 
   if (!isVisible) return null;
 
+  const candidateLabel = candidate?.anonymous_id || "Candidate";
+  const alumnusLabel = alumnus?.alumnus_name || "Alumni Hub";
+  const targetLabel = alumnus?.alumnus_company || candidate?.target_company || "Target Corp";
+
   return (
     <div className="w-full max-w-2xl mx-auto mb-8">
       {/* Section Header */}
@@ -150,7 +154,7 @@ const NetworkGraph = ({ candidate, alumnus, isVisible }) => {
             opacity={isAnimating ? 1 : 0}
             style={{ transition: "opacity 400ms ease-out 200ms" }}
           >
-            Candidate
+            {candidateLabel}
           </text>
 
           <text
@@ -162,7 +166,7 @@ const NetworkGraph = ({ candidate, alumnus, isVisible }) => {
             opacity={isAnimating ? 1 : 0}
             style={{ transition: "opacity 500ms ease-out 300ms" }}
           >
-            Alumni Hub
+            {alumnusLabel}
           </text>
 
           <text
@@ -174,7 +178,7 @@ const NetworkGraph = ({ candidate, alumnus, isVisible }) => {
             opacity={isAnimating ? 1 : 0}
             style={{ transition: "opacity 600ms ease-out 400ms" }}
           >
-            Target Corp
+            {targetLabel}
           </text>
 
           {/* Tier Badge */}

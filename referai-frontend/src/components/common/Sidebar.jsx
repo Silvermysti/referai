@@ -1,51 +1,52 @@
-const Sidebar = ({ setPage, currentPage }) => {
+const navByRole = {
+  employee: [{ id: "opportunities", label: "Opportunities", hint: "Find referrals and recruiters" }],
+  recruiter: [{ id: "recruiter", label: "Review Queue", hint: "Source, rate, and refer matches" }],
+};
+
+const Sidebar = ({ setPage, currentPage, user }) => {
   const isActive = (pageName) => currentPage === pageName;
+  const navItems = navByRole[user?.role] || navByRole.employee;
 
   return (
-    <div className="w-64 h-screen bg-card-surface bg-opacity-70 backdrop-blur-md p-6 border-r border-slate-900 flex flex-col" style={{ borderRightColor: "rgba(226, 232, 240, 0.06)" }}>
-      <h2 className="text-lg font-semibold text-white mb-8 tracking-tight">Navigation</h2>
-
-      <ul className="space-y-3 flex-1">
-        <li
-          onClick={() => setPage("recruiter")}
-          className={`cursor-pointer px-4 py-3 rounded-lg transition-all duration-200 ${
-            isActive("recruiter")
-              ? "text-white font-bold bg-canvas"
-              : "text-muted-secondary hover:text-white hover:bg-canvas"
-          }`}
-        >
-          🏢 Recruiter Dashboard
-        </li>
-
-        <li
-          onClick={() => setPage("employee")}
-          className={`cursor-pointer px-4 py-3 rounded-lg transition-all duration-200 ${
-            isActive("employee")
-              ? "text-white font-bold bg-canvas"
-              : "text-muted-secondary hover:text-white hover:bg-canvas"
-          }`}
-        >
-          🧑‍💼 Employee View
-        </li>
-
-        <li
-          onClick={() => setPage("student")}
-          className={`cursor-pointer px-4 py-3 rounded-lg transition-all duration-200 ${
-            isActive("student")
-              ? "text-white font-bold bg-canvas"
-              : "text-muted-secondary hover:text-white hover:bg-canvas"
-          }`}
-        >
-          🎓 Student Portal
-        </li>
-      </ul>
-
-      {/* Footer Info */}
-      <div className="pt-6 border-t border-slate-900" style={{ borderTopColor: "rgba(226, 232, 240, 0.06)" }}>
-        <p className="text-xs text-muted-secondary">Network Equity Engine v1.0</p>
-        <p className="text-xs text-muted-secondary mt-1">Institutional-Grade Talent Intelligence</p>
+    <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-app bg-[var(--surface)] px-5 py-6 lg:flex lg:flex-col">
+      <div className="mb-8">
+        <div className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-slate-950 text-sm font-black text-white dark:bg-white dark:text-slate-950">
+          R
+        </div>
+        <h2 className="text-xl font-black tracking-tight text-main">ReferAI</h2>
+        <p className="mt-1 text-sm leading-5 text-muted">Referral intelligence for modern hiring.</p>
       </div>
-    </div>
+
+      <nav className="flex-1 space-y-2">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setPage(item.id)}
+            className={`w-full rounded-lg px-4 py-3 text-left transition ${
+              isActive(item.id)
+                ? "bg-[var(--text)] text-[var(--bg)] shadow-sm"
+                : "text-muted hover:bg-[var(--surface-soft)] hover:text-main"
+            }`}
+          >
+            <span className="block text-sm font-black">{item.label}</span>
+            <span className={`mt-1 block text-xs ${isActive(item.id) ? "opacity-75" : "text-faint"}`}>
+              {item.hint}
+            </span>
+          </button>
+        ))}
+      </nav>
+
+      <div className="surface-flat p-4">
+        <p className="text-sm font-black text-main">
+          {user?.role === "recruiter" ? "Recruiter workspace" : "Employee workspace"}
+        </p>
+        <p className="mt-1 text-sm leading-6 text-muted">
+          {user?.role === "recruiter"
+            ? "Review verified inbound candidates and referral status."
+            : "Find real contacts, request recruiter connections, and review referral asks."}
+        </p>
+      </div>
+    </aside>
   );
 };
 

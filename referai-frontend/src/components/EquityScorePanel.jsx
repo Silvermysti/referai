@@ -36,7 +36,7 @@ const EquityScorePanel = ({ trustScore, skillMatch, networkScore, isDeiActive })
   }, [proofOfWorkScore, networkScore, skillMatch]);
 
   // Bar component
-  const BarItem = ({ label, animKey, animatedValue, weight, deiHighlight, icon }) => {
+  const BarItem = ({ label, animatedValue, weight, deiHighlight, icon }) => {
     const isHighlighted = isDeiActive && deiHighlight;
 
     return (
@@ -89,7 +89,6 @@ const EquityScorePanel = ({ trustScore, skillMatch, networkScore, isDeiActive })
       <div className="mb-6">
         <BarItem
           label="Proof of Work"
-          animKey="pow"
           animatedValue={animatedValues.pow}
           weight={weights.pow}
           deiHighlight={true}
@@ -97,7 +96,6 @@ const EquityScorePanel = ({ trustScore, skillMatch, networkScore, isDeiActive })
         />
         <BarItem
           label="Network Strength"
-          animKey="network"
           animatedValue={animatedValues.network}
           weight={weights.network}
           deiHighlight={false}
@@ -105,7 +103,6 @@ const EquityScorePanel = ({ trustScore, skillMatch, networkScore, isDeiActive })
         />
         <BarItem
           label="Skill Match"
-          animKey="skill"
           animatedValue={animatedValues.skill}
           weight={weights.skill}
           deiHighlight={false}

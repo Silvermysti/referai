@@ -1,25 +1,30 @@
-const Header = () => {
+const pageTitles = {
+  opportunities: "Opportunities",
+  reviews: "Review Queue",
+  recruiter: "Review Queue",
+};
+
+const Header = ({ currentPage, user, onLogout, theme, onToggleTheme }) => {
   return (
-    <div className="w-full h-16 bg-canvas flex items-center justify-between px-8 border-b border-slate-900" style={{ borderRightColor: "rgba(226, 232, 240, 0.06)" }}>
-      {/* Logo & Branding */}
-      <div className="flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
-          <span className="text-white font-bold text-sm">N</span>
-        </div>
-        <div>
-          <h1 className="text-lg font-semibold tracking-tight text-white">Network Equity Engine</h1>
-          <p className="text-xs text-muted-secondary">Institutional Talent Intelligence</p>
-        </div>
+    <header className="sticky top-0 z-20 flex h-16 items-center justify-between border-b border-app bg-[var(--surface)]/90 px-4 backdrop-blur md:px-8">
+      <div>
+        <p className="text-xs font-black uppercase tracking-wide text-muted">ReferAI</p>
+        <h1 className="text-base font-black text-main md:text-lg">{pageTitles[currentPage]}</h1>
       </div>
 
-      {/* System Status Indicator */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2 px-3 py-1 rounded-lg bg-card-surface bg-opacity-70 backdrop-blur-md" style={{ border: "1px solid rgba(226, 232, 240, 0.06)" }}>
-          <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
-          <span className="text-xs text-muted-primary">System Active</span>
+      <div className="flex items-center gap-2">
+        <button onClick={onToggleTheme} className="btn-secondary px-3 py-2 text-sm">
+          {theme === "dark" ? "Light" : "Dark"}
+        </button>
+        <div className="hidden text-right sm:block">
+          <p className="text-sm font-black text-main">{user?.name || "User"}</p>
+          <p className="text-xs capitalize text-muted">{user?.role || "employee"}</p>
         </div>
+        <button onClick={onLogout} className="btn-secondary px-3 py-2 text-sm">
+          Log out
+        </button>
       </div>
-    </div>
+    </header>
   );
 };
 

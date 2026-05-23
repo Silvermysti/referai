@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 const ProofOfWorkChallenge = ({ candidate, onSubmit, isJudgeActive }) => {
   const missingSkill = candidate.skills_matrix.find(s => s.status === "MISSING");
 
