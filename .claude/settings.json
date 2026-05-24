@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | grep -q 'PROJECT_CONTEXT.md' && echo '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"PROJECT_CONTEXT.md was just modified. You MUST update the project memory file at /home/administrator/.claude/projects/-home-administrator-Documents-Peojects-referai/memory/project_referai.md to reflect any changes before finishing your response.\"}}' || true",
+            "statusMessage": "Checking if project memory needs updating..."
+          }
+        ]
+      }
+    ]
+  }
+}
