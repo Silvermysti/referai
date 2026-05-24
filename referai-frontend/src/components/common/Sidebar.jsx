@@ -1,6 +1,5 @@
 const navByRole = {
-  employee: [{ id: "opportunities", label: "Opportunities", hint: "Find referrals and recruiters" }],
-  recruiter: [{ id: "recruiter", label: "Review Queue", hint: "Source, rate, and refer matches" }],
+  employee: [{ id: "opportunities", label: "Opportunities", hint: "Find referrers for your target role" }],
 };
 
 const Sidebar = ({ setPage, currentPage, user }) => {
@@ -37,14 +36,8 @@ const Sidebar = ({ setPage, currentPage, user }) => {
       </nav>
 
       <div className="surface-flat p-4">
-        <p className="text-sm font-black text-main">
-          {user?.role === "recruiter" ? "Recruiter workspace" : "Employee workspace"}
-        </p>
-        <p className="mt-1 text-sm leading-6 text-muted">
-          {user?.role === "recruiter"
-            ? "Review verified inbound candidates and referral status."
-            : "Find real contacts, request recruiter connections, and review referral asks."}
-        </p>
+        <p className="text-sm font-black text-main">Your workspace</p>
+        <p className="mt-1 text-sm leading-6 text-muted">Find real employees, send referral requests, and track your progress.</p>
       </div>
     </aside>
   );

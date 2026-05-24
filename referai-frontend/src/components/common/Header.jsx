@@ -1,7 +1,5 @@
 const pageTitles = {
   opportunities: "Opportunities",
-  reviews: "Review Queue",
-  recruiter: "Review Queue",
 };
 
 const Header = ({ currentPage, user, onLogout, theme, onToggleTheme }) => {

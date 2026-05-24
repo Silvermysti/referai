@@ -101,9 +101,9 @@ const Landing = ({ onAuth, theme, onToggleTheme }) => {
 
         <section id="product" className="border-y border-app bg-[var(--surface)]">
           <div className="mx-auto grid max-w-7xl gap-6 px-5 py-14 md:grid-cols-3 md:px-8">
-            <Feature title="For employees" body="Find referrers and recruiters who are likely to respond, then send stronger requests backed by work." />
-            <Feature title="For referrers" body="Review cleaner referral requests with fit signals, proof, and reward tracking." />
-            <Feature title="For recruiters" body="Prioritize candidates who already have verified skills and warm internal support." />
+            <Feature title="Find referrers" body="Rank employees at your target company by how relevant their background is to the role you're applying for." />
+            <Feature title="AI-matched outreach" body="Get a tailored message draft and career companion plan based on the job description and your profile." />
+            <Feature title="Track requests" body="Send referral requests, track responses, and earn rewards when referrals convert." />
           </div>
         </section>
 
@@ -114,7 +114,7 @@ const Landing = ({ onAuth, theme, onToggleTheme }) => {
               <h2 className="mt-3 text-4xl font-black tracking-tight text-main">A cleaner path from application to conversation.</h2>
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
-              {["Skill evidence", "Alumni routing", "Referral incentives", "Recruiter analytics"].map((item) => (
+              {["Skill evidence", "Alumni routing", "Referral incentives", "Match analytics"].map((item) => (
                 <div key={item} className="surface-flat p-5">
                   <p className="font-black text-main">{item}</p>
                   <p className="mt-2 text-sm leading-6 text-muted">Designed to reduce noise while keeping the process transparent.</p>
