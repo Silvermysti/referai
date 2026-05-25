@@ -1,5 +1,8 @@
 const navByRole = {
-  employee: [{ id: "opportunities", label: "Opportunities", hint: "Find referrers for your target role" }],
+  employee: [
+    { id: "opportunities", label: "Opportunities", hint: "Find referrers for your target role" },
+    { id: "profile", label: "Profile", hint: "Skills, interests, resume upload" },
+  ],
 };
 
 const Sidebar = ({ setPage, currentPage, user }) => {

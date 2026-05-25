@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import Layout from "./components/common/Layout";
 import Auth from "./pages/Auth";
 import Landing from "./pages/Landing";
+import Profile from "./pages/Profile";
 import Student from "./pages/Student";
 
 function App() {
@@ -26,6 +27,8 @@ function App() {
     setPage("opportunities");
     setView("app");
   };
+
+  const handleUserUpdate = (updatedUser) => setUser(updatedUser);
 
   const logout = () => {
     setUser(null);
@@ -59,7 +62,9 @@ function App() {
       theme={theme}
       onToggleTheme={toggleTheme}
     >
-      <Student user={user} />
+      {page === "profile"
+        ? <Profile user={user} onUserUpdate={handleUserUpdate} />
+        : <Student user={user} />}
     </Layout>
   );
 }

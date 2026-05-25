@@ -173,6 +173,8 @@ const Student = ({ user }) => {
                     <p className="text-2xl font-black text-[var(--primary-strong)]">{employee.match_score}</p>
                   </div>
                   {employee.is_connected && <span className="badge badge-green">Connected</span>}
+                  {employee.is_alumni && <span className="badge badge-amber">Alumni</span>}
+                  {employee.is_coworker && <span className="badge badge-purple">Coworker</span>}
                 </div>
               </div>
 
@@ -240,6 +242,11 @@ const Student = ({ user }) => {
                   <h3 className="mt-1 text-xl font-black text-main">{selected.name}</h3>
                   <p className="mt-1 text-sm text-muted">{selected.role} · {selected.company}</p>
                   {selected.bio && <p className="mt-3 text-sm leading-6 text-muted">{selected.bio}</p>}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selected.is_connected && <span className="badge badge-green">Connected</span>}
+                    {selected.is_alumni && <span className="badge badge-amber">Alumni · {selected.shared_college}</span>}
+                    {selected.is_coworker && <span className="badge badge-purple">Coworker · {selected.shared_company}</span>}
+                  </div>
                 </div>
                 <div className="rounded-lg border border-app px-3 py-2 text-center">
                   <p className="text-xs font-bold text-muted">Reply</p>

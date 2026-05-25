@@ -112,3 +112,29 @@ export const getCareerCompanion = ({ userId, jobId, job, profile }) =>
       profile,
     }),
   });
+
+export const uploadResume = (file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return fetch(`${API_BASE}/api/profile/upload-resume`, { method: "POST", body: form })
+    .then((res) => {
+      if (!res.ok) return res.json().then((e) => { throw new Error(e.error || "Upload failed"); });
+      return res.json();
+    });
+};
+
+export const updateProfile = ({ userId, skills, education, experience, interests, targetCompanies, currentRole, targetRole, summary }) =>
+  request("/api/profile", {
+    method: "PUT",
+    body: JSON.stringify({
+      user_id: userId,
+      skills: skills || [],
+      education: education || [],
+      experience: experience || [],
+      interests: interests || [],
+      target_companies: targetCompanies || [],
+      current_role: currentRole || "",
+      target_role: targetRole || "",
+      summary: summary || "",
+    }),
+  });

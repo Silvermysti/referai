@@ -1,5 +1,6 @@
 const pageTitles = {
   opportunities: "Opportunities",
+  profile: "Profile",
 };
 
 const Header = ({ currentPage, user, onLogout, theme, onToggleTheme }) => {

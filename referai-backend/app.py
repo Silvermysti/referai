@@ -12,6 +12,12 @@ from uuid import uuid4
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
+
 app = Flask(__name__)
 CORS(app)
 
@@ -10782,11 +10788,14 @@ def user_signal_text(user):
     skills = _as_list(user.get("skills"))
     education = _as_list(user.get("education"))
     experience = _as_list(user.get("experience"))
+    interests = _as_list(user.get("interests"))
+    target_companies = _as_list(user.get("target_companies"))
     edu = " ".join(e.get("college", "") + " " + e.get("branch", "") for e in education)
     exp = " ".join(e.get("description", "") + " " + e.get("role", "") for e in experience)
     return " ".join(filter(None, [
         user.get("name", ""), user.get("current_role", ""), user.get("target_role", ""),
-        " ".join(skills), user.get("summary", ""), edu, exp,
+        " ".join(skills), " ".join(interests), " ".join(target_companies),
+        user.get("summary", ""), edu, exp,
     ]))
 
 
@@ -10800,6 +10809,121 @@ def employee_signal_text(emp):
         emp.get("name", ""), emp.get("role", ""), emp.get("department", ""),
         " ".join(skills), emp.get("bio", ""), edu, exp,
     ]))
+
+
+# ---------------------------------------------------------------------------
+# Resume text extraction
+# ---------------------------------------------------------------------------
+
+def extract_text_from_pdf(file_storage):
+    try:
+        import pdfplumber
+        with pdfplumber.open(file_storage) as pdf:
+            return "\n".join(page.extract_text() or "" for page in pdf.pages)
+    except Exception as exc:
+        raise ValueError(f"Could not read PDF: {exc}") from exc
+
+
+def extract_text_from_docx(file_storage):
+    try:
+        import docx
+        doc = docx.Document(file_storage)
+        return "\n".join(p.text for p in doc.paragraphs)
+    except Exception as exc:
+        raise ValueError(f"Could not read DOCX: {exc}") from exc
+
+
+def extract_resume_text(file_storage):
+    name = (file_storage.filename or "").lower()
+    if name.endswith(".pdf"):
+        return extract_text_from_pdf(file_storage)
+    if name.endswith(".docx"):
+        return extract_text_from_docx(file_storage)
+    raise ValueError("Only PDF and DOCX files are supported.")
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek extraction
+# ---------------------------------------------------------------------------
+
+_EXTRACT_PROMPT = """You are a resume parser. Extract structured information from the resume text below.
+Return ONLY a valid JSON object — no markdown, no extra text — with exactly this shape:
+{
+  "skills": ["skill1", "skill2"],
+  "education": [{"college": "...", "degree": "...", "branch": "...", "graduation_year": 2024}],
+  "experience": [{"company": "...", "role": "...", "duration": "...", "description": "..."}],
+  "interests": ["interest1", "interest2"],
+  "current_role": "...",
+  "summary": "one sentence professional summary"
+}
+Rules:
+- skills: technical skills, tools, languages, frameworks — keep them short (1–4 words each)
+- interests: domains the candidate cares about (e.g. "machine learning", "fintech", "open source")
+- graduation_year: integer, null if unknown
+- duration: e.g. "6 months", "2 years", null if unknown
+- Omit any field you cannot infer — do not guess
+- Return an empty array [] if a section has no data
+
+Resume:
+"""
+
+
+def extract_with_deepseek(resume_text):
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "your_deepseek_api_key_here":
+        return None
+
+    payload = json.dumps({
+        "model": DEEPSEEK_MODEL,
+        "messages": [{"role": "user", "content": _EXTRACT_PROMPT + resume_text[:8000]}],
+        "temperature": 0.1,
+        "max_tokens": 1024,
+    }).encode()
+
+    req = Request(
+        f"{DEEPSEEK_BASE_URL}/chat/completions",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        },
+    )
+    try:
+        with urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        content = data["choices"][0]["message"]["content"].strip()
+        # Strip markdown fences if DeepSeek wraps the JSON
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+        return json.loads(content)
+    except Exception:
+        return None
+
+
+def extract_resume_regex_fallback(text):
+    """Best-effort regex extraction when DeepSeek is unavailable."""
+    skill_keywords = re.findall(
+        r"\b(Python|Java|JavaScript|TypeScript|Go|Rust|C\+\+|React|Node\.js|"
+        r"FastAPI|Django|Flask|PostgreSQL|MySQL|Redis|Docker|Kubernetes|AWS|"
+        r"GCP|Azure|TensorFlow|PyTorch|SQL|Git|Linux|Bash|REST|GraphQL)\b",
+        text, re.IGNORECASE,
+    )
+    skills = list(dict.fromkeys(s.lower() for s in skill_keywords))
+
+    year_pattern = r"(19|20)\d{2}"
+    years = re.findall(year_pattern, text)
+    graduation_year = int(max(years)) if years else None
+
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    summary = lines[0] if lines else ""
+
+    return {
+        "skills": skills,
+        "education": [{"college": "", "degree": "", "branch": "", "graduation_year": graduation_year}] if graduation_year else [],
+        "experience": [],
+        "interests": [],
+        "current_role": "",
+        "summary": summary[:200],
+    }
 
 
 
@@ -10838,9 +10962,11 @@ def _deserialize_user(row):
         return None
     return {
         **row,
-        "skills": jl(row.get("skills","[]")),
-        "education": jl(row.get("education","[]")),
-        "experience": jl(row.get("experience","[]")),
+        "skills": jl(row.get("skills", "[]")),
+        "education": jl(row.get("education", "[]")),
+        "experience": jl(row.get("experience", "[]")),
+        "interests": jl(row.get("interests", "[]")),
+        "target_companies": jl(row.get("target_companies", "[]")),
     }
 
 
@@ -10878,6 +11004,10 @@ AI_AGENT_WEIGHTS = {
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
+
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL = "deepseek-chat"
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
@@ -12166,14 +12296,25 @@ def match():
     job_signal = f"{job.get('role','')} {job.get('description','')} {' '.join(job.get('skills',[]))}"
     user_signal = user_signal_text(user) if user else ""
 
+    # Precompute user college and company sets for badge detection
+    user_colleges = {e.get("college", "").lower().strip() for e in _as_list(user.get("education") if user else [])} - {""}
+    user_companies = {e.get("company", "").lower().strip() for e in _as_list(user.get("experience") if user else [])} - {""}
+
     results = []
     for emp in employees:
         emp_signal = employee_signal_text(emp)
         job_emp_score = cosine_similarity(emp_signal, job_signal)
         user_emp_score = cosine_similarity(user_signal, emp_signal) if user_signal else 0
         connection_bonus = 15 if emp["id"] in connected_ids else 0
+
+        emp_colleges = {e.get("college", "").lower().strip() for e in _as_list(emp.get("education"))} - {""}
+        emp_companies = {e.get("company", "").lower().strip() for e in _as_list(emp.get("experience"))} - {""}
+        is_alumni = bool(user_colleges & emp_colleges)
+        is_coworker = bool(user_companies & emp_companies)
+        relationship_bonus = (5 if is_alumni else 0) + (5 if is_coworker else 0)
+
         final_score = min(99, round(
-            (job_emp_score * 60) + (user_emp_score * 25) + connection_bonus
+            (job_emp_score * 60) + (user_emp_score * 25) + connection_bonus + relationship_bonus
         ))
         results.append({
             **emp,
@@ -12181,6 +12322,10 @@ def match():
             "job_relevance": round(job_emp_score * 100),
             "user_affinity": round(user_emp_score * 100),
             "is_connected": emp["id"] in connected_ids,
+            "is_alumni": is_alumni,
+            "is_coworker": is_coworker,
+            "shared_college": next(iter(user_colleges & emp_colleges), None),
+            "shared_company": next(iter(user_companies & emp_companies), None),
         })
 
     ranked = sorted(results, key=lambda x: x["match_score"], reverse=True)
@@ -12374,6 +12519,84 @@ def generate_message():
     })
 
 
+@app.route("/api/profile/upload-resume", methods=["POST"])
+def upload_resume():
+    if "file" not in request.files:
+        return jsonify({"error": "No file provided. Send a multipart field named 'file'."}), 400
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Empty filename."}), 400
+    try:
+        resume_text = extract_resume_text(file)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    extracted = extract_with_deepseek(resume_text)
+    deepseek_used = extracted is not None
+    if not extracted:
+        extracted = extract_resume_regex_fallback(resume_text)
+
+    return jsonify({
+        "extracted": extracted,
+        "deepseek_used": deepseek_used,
+        "preview_text": resume_text[:400],
+    })
+
+
+@app.route("/api/profile", methods=["PUT"])
+def update_profile():
+    payload = request.get_json(silent=True) or {}
+    user_id = payload.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id required"}), 400
+    user = find_user(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    def merge_list_dedup(existing, incoming, key_fn):
+        existing_keys = {key_fn(e) for e in existing}
+        return existing + [e for e in incoming if key_fn(e) not in existing_keys]
+
+    def str_key(v):
+        return v.lower().strip() if isinstance(v, str) else ""
+
+    def edu_key(e):
+        return (e.get("college", "").lower().strip(), e.get("degree", "").lower().strip())
+
+    def exp_key(e):
+        return (e.get("company", "").lower().strip(), e.get("role", "").lower().strip())
+
+    merged_skills = merge_list_dedup(
+        _as_list(user.get("skills")), _as_list(payload.get("skills", [])), str_key
+    )
+    merged_education = merge_list_dedup(
+        _as_list(user.get("education")), _as_list(payload.get("education", [])), edu_key
+    )
+    merged_experience = merge_list_dedup(
+        _as_list(user.get("experience")), _as_list(payload.get("experience", [])), exp_key
+    )
+    merged_interests = merge_list_dedup(
+        _as_list(user.get("interests")), _as_list(payload.get("interests", [])), str_key
+    )
+    merged_target_companies = merge_list_dedup(
+        _as_list(user.get("target_companies")), _as_list(payload.get("target_companies", [])), str_key
+    )
+
+    db_execute(
+        "UPDATE users SET skills=?, education=?, experience=?, interests=?, target_companies=?,"
+        " current_role=COALESCE(NULLIF(?,''), current_role),"
+        " target_role=COALESCE(NULLIF(?,''), target_role),"
+        " summary=COALESCE(NULLIF(?,''), summary) WHERE id=?",
+        (
+            j(merged_skills), j(merged_education), j(merged_experience),
+            j(merged_interests), j(merged_target_companies),
+            payload.get("current_role", ""), payload.get("target_role", ""),
+            payload.get("summary", ""), user_id,
+        ),
+    )
+    return jsonify({"user": find_user(user_id)})
+
+
 def hydrate_requests():
     rows = db_query("SELECT * FROM referral_requests ORDER BY created_at DESC")
     return [hydrate_request(r) for r in rows]
@@ -12409,7 +12632,10 @@ def init_db():
             target_company  TEXT,
             skills          TEXT DEFAULT '[]',
             education       TEXT DEFAULT '[]',
-            experience      TEXT DEFAULT '[]'
+            experience      TEXT DEFAULT '[]',
+            interests       TEXT DEFAULT '[]',
+            target_companies TEXT DEFAULT '[]',
+            resume_text     TEXT
         );
         CREATE TABLE IF NOT EXISTS employees (
             id                   TEXT PRIMARY KEY,
@@ -12474,6 +12700,18 @@ def init_db():
         );
     """)
     conn.commit()
+
+    # Migrate existing databases that pre-date the new columns
+    for migration_sql in [
+        "ALTER TABLE users ADD COLUMN interests TEXT DEFAULT '[]'",
+        "ALTER TABLE users ADD COLUMN target_companies TEXT DEFAULT '[]'",
+        "ALTER TABLE users ADD COLUMN resume_text TEXT",
+    ]:
+        try:
+            conn.execute(migration_sql)
+            conn.commit()
+        except Exception:
+            pass  # column already exists
 
     for job in JOBS:
         conn.execute(
