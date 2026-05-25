@@ -10868,33 +10868,49 @@ Resume:
 """
 
 
+def _parse_llm_json(raw):
+    """Strip markdown fences and parse JSON from any LLM response."""
+    text = raw.strip()
+    text = re.sub(r"^```(?:json)?\s*", "", text)
+    text = re.sub(r"\s*```$", "", text)
+    return json.loads(text)
+
+
 def extract_with_deepseek(resume_text):
     if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "your_deepseek_api_key_here":
         return None
-
     payload = json.dumps({
         "model": DEEPSEEK_MODEL,
         "messages": [{"role": "user", "content": _EXTRACT_PROMPT + resume_text[:8000]}],
         "temperature": 0.1,
         "max_tokens": 1024,
     }).encode()
-
     req = Request(
         f"{DEEPSEEK_BASE_URL}/chat/completions",
         data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
-        },
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
     )
     try:
         with urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read())
-        content = data["choices"][0]["message"]["content"].strip()
-        # Strip markdown fences if DeepSeek wraps the JSON
-        content = re.sub(r"^```(?:json)?\s*", "", content)
-        content = re.sub(r"\s*```$", "", content)
-        return json.loads(content)
+        return _parse_llm_json(data["choices"][0]["message"]["content"])
+    except Exception:
+        return None
+
+
+def extract_with_gemini(resume_text):
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+        return None
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": _EXTRACT_PROMPT + resume_text[:8000]}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024},
+    }).encode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        return _parse_llm_json(data["candidates"][0]["content"]["parts"][0]["text"])
     except Exception:
         return None
 
@@ -11008,6 +11024,9 @@ OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.2:3b")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
@@ -12532,13 +12551,17 @@ def upload_resume():
         return jsonify({"error": str(exc)}), 400
 
     extracted = extract_with_deepseek(resume_text)
-    deepseek_used = extracted is not None
+    provider = "deepseek" if extracted is not None else None
+    if not extracted:
+        extracted = extract_with_gemini(resume_text)
+        provider = "gemini" if extracted is not None else None
     if not extracted:
         extracted = extract_resume_regex_fallback(resume_text)
+        provider = "regex"
 
     return jsonify({
         "extracted": extracted,
-        "deepseek_used": deepseek_used,
+        "provider": provider,
         "preview_text": resume_text[:400],
     })
 

@@ -26,7 +26,7 @@ const Profile = ({ user, onUserUpdate }) => {
     setUploading(true);
     try {
       const result = await uploadResume(file);
-      setExtraction(result);
+      setExtraction(result);  // result has { extracted, provider, preview_text }
     } catch (err) {
       setUploadError(err.message);
     } finally {
@@ -100,7 +100,7 @@ const Profile = ({ user, onUserUpdate }) => {
       {extraction && (
         <ExtractionPreview
           extracted={extraction.extracted}
-          deepseekUsed={extraction.deepseek_used}
+          provider={extraction.provider}
           onConfirm={handleConfirmExtraction}
           onCancel={() => setExtraction(null)}
         />
