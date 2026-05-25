@@ -10790,8 +10790,8 @@ def user_signal_text(user):
     experience = _as_list(user.get("experience"))
     interests = _as_list(user.get("interests"))
     target_companies = _as_list(user.get("target_companies"))
-    edu = " ".join(e.get("college", "") + " " + e.get("branch", "") for e in education)
-    exp = " ".join(e.get("description", "") + " " + e.get("role", "") for e in experience)
+    edu = " ".join((e.get("college") or "") + " " + (e.get("branch") or "") for e in education)
+    exp = " ".join((e.get("description") or "") + " " + (e.get("role") or "") for e in experience)
     return " ".join(filter(None, [
         user.get("name", ""), user.get("current_role", ""), user.get("target_role", ""),
         " ".join(skills), " ".join(interests), " ".join(target_companies),
@@ -10803,8 +10803,8 @@ def employee_signal_text(emp):
     skills = _as_list(emp.get("skills"))
     education = _as_list(emp.get("education"))
     experience = _as_list(emp.get("experience"))
-    edu = " ".join(e.get("college", "") + " " + e.get("branch", "") for e in education)
-    exp = " ".join(e.get("description", "") + " " + e.get("role", "") for e in experience)
+    edu = " ".join((e.get("college") or "") + " " + (e.get("branch") or "") for e in education)
+    exp = " ".join((e.get("description") or "") + " " + (e.get("role") or "") for e in experience)
     return " ".join(filter(None, [
         emp.get("name", ""), emp.get("role", ""), emp.get("department", ""),
         " ".join(skills), emp.get("bio", ""), edu, exp,
@@ -12592,9 +12592,8 @@ def update_profile():
     merged_skills = merge_list_dedup(
         _as_list(user.get("skills")), _as_list(payload.get("skills", [])), str_key
     )
-    merged_education = merge_list_dedup(
-        _as_list(user.get("education")), _as_list(payload.get("education", [])), edu_key
-    )
+    # Education is sent as the complete list from the frontend editor, so replace directly.
+    merged_education = _as_list(payload.get("education", []))
     merged_experience = merge_list_dedup(
         _as_list(user.get("experience")), _as_list(payload.get("experience", [])), exp_key
     )
