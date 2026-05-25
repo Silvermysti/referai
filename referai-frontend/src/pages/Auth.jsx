@@ -22,6 +22,9 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
     event.preventDefault();
     setError("");
     setStatus("");
+    if (!form.email.trim()) { setError("Email is required."); return; }
+    if (!form.password) { setError("Password is required."); return; }
+    if (isSignup && !form.name.trim()) { setError("Name is required."); return; }
     setLoading(true);
     try {
       const response = isSignup ? await authSignup(form) : await authLogin(form);
@@ -66,7 +69,7 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
               Build referrals around proof, not cold messages.
             </h1>
             <div className="mt-8 space-y-4">
-              {["Smart matching", "Employee review", "Recruiter pipeline"].map((item) => (
+              {["Smart matching", "Verified referrers", "Referral tracking"].map((item) => (
                 <div key={item} className="surface-flat p-4">
                   <p className="font-black text-main">{item}</p>
                   <p className="mt-1 text-sm text-muted">Available after login.</p>
@@ -100,8 +103,7 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
                 <span className="mb-2 block text-sm font-bold text-main">Email</span>
                 <input
                   className="field"
-                  type="text"
-                  inputMode="email"
+                  type="email"
                   value={form.email}
                   placeholder="you@example.com"
                   onChange={(event) => setForm({ ...form, email: event.target.value })}
@@ -119,19 +121,6 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
                 />
               </label>
 
-              {isSignup && (
-                <label className="block">
-                  <span className="mb-2 block text-sm font-bold text-main">I am joining as</span>
-                  <select
-                    className="field"
-                    value={form.role}
-                    onChange={(event) => setForm({ ...form, role: event.target.value })}
-                  >
-                    <option value="employee">Employee</option>
-                    <option value="recruiter">Recruiter</option>
-                  </select>
-                </label>
-              )}
 
               {isSignup && (
                 <>

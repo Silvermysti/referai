@@ -175,6 +175,15 @@ button:disabled {
   color: var(--warning);
 }
 
+.badge-purple {
+  background: rgb(139 92 246 / 0.14);
+  color: #7c3aed;
+}
+
+.dark .badge-purple {
+  color: #a78bfa;
+}
+
 .metric-card,
 .app-card {
   background: var(--surface);

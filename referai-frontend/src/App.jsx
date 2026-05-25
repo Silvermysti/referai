@@ -1,16 +1,9 @@
 import { useEffect, useState } from "react";
 import Layout from "./components/common/Layout";
 import Auth from "./pages/Auth";
-import Employee from "./pages/Employee";
 import Landing from "./pages/Landing";
-import Recruiter from "./pages/Recruiter";
+import Profile from "./pages/Profile";
 import Student from "./pages/Student";
-
-const roleToPage = {
-  student: "opportunities",
-  employee: "opportunities",
-  recruiter: "recruiter",
-};
 
 function App() {
   const [view, setView] = useState("landing");
@@ -31,19 +24,15 @@ function App() {
 
   const handleAuth = (account) => {
     setUser(account);
-    setPage(roleToPage[account.role] || "opportunities");
+    setPage("opportunities");
     setView("app");
   };
+
+  const handleUserUpdate = (updatedUser) => setUser(updatedUser);
 
   const logout = () => {
     setUser(null);
     setView("landing");
-  };
-
-  const renderPage = () => {
-    if (page === "reviews") return <Employee />;
-    if (page === "recruiter") return <Recruiter user={user} />;
-    return <Student user={user} />;
   };
 
   const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
@@ -73,7 +62,9 @@ function App() {
       theme={theme}
       onToggleTheme={toggleTheme}
     >
-      {renderPage()}
+      {page === "profile"
+        ? <Profile user={user} onUserUpdate={handleUserUpdate} />
+        : <Student user={user} />}
     </Layout>
   );
 }

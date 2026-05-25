@@ -45,23 +45,23 @@ export const parseJob = (jobUrl) =>
     body: JSON.stringify({ job_url: jobUrl }),
   });
 
-export const getMatches = ({ jobId, job, deiMode = false }) =>
+export const getMatches = ({ jobId, job, userId }) =>
   request("/api/match", {
     method: "POST",
-    body: JSON.stringify({ job_id: jobId, job, dei_mode: deiMode }),
+    body: JSON.stringify({ job_id: jobId, job, user_id: userId }),
   });
 
-export const submitProof = ({ candidateId, solution }) =>
+export const submitProof = ({ userId, solution }) =>
   request("/api/proof/submit", {
     method: "POST",
-    body: JSON.stringify({ candidate_id: candidateId, solution }),
+    body: JSON.stringify({ user_id: userId, solution }),
   });
 
-export const createReferralRequest = ({ candidateId, employeeId, jobId, job, message }) =>
+export const createReferralRequest = ({ userId, employeeId, jobId, job, message }) =>
   request("/api/referral-requests", {
     method: "POST",
     body: JSON.stringify({
-      candidate_id: candidateId,
+      user_id: userId,
       employee_id: employeeId,
       job_id: jobId,
       job,
@@ -77,79 +77,64 @@ export const submitReferralDecision = ({ requestId, decision, notes }) =>
     body: JSON.stringify({ decision, notes }),
   });
 
-export const getRecruiterData = () => request("/api/recruiter-dashboard");
-
-export const sourceRecruiterProfiles = ({ jobUrl }) =>
-  request("/api/recruiter-search", {
-    method: "POST",
-    body: JSON.stringify({ job_url: jobUrl }),
-  });
-
-export const markRecruiterReferral = ({ job, profile }) =>
-  request("/api/recruiter-referrals", {
-    method: "POST",
-    body: JSON.stringify({ job, profile }),
-  });
-
-export const getCandidates = (filters = {}) => {
+export const getUsers = (filters = {}) => {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
     if (value) params.set(key, value);
   });
-  return request(`/api/candidates${params.toString() ? `?${params}` : ""}`);
+  return request(`/api/users${params.toString() ? `?${params}` : ""}`);
 };
 
-export const getRecruiters = (filters = {}) => {
-  const params = new URLSearchParams();
-  Object.entries(filters).forEach(([key, value]) => {
-    if (value) params.set(key, value);
-  });
-  return request(`/api/recruiters${params.toString() ? `?${params}` : ""}`);
-};
-
-export const createConnection = ({ fromType, fromId, toType, toId, note }) =>
+export const createConnection = ({ userId, employeeId, connectionType = "cold" }) =>
   request("/api/connections", {
     method: "POST",
-    body: JSON.stringify({
-      from_type: fromType,
-      from_id: fromId,
-      to_type: toType,
-      to_id: toId,
-      note,
-    }),
+    body: JSON.stringify({ user_id: userId, employee_id: employeeId, connection_type: connectionType }),
   });
 
-export const sendMessage = ({ connectionId, senderType, senderId, body }) =>
-  request("/api/messages", {
-    method: "POST",
-    body: JSON.stringify({
-      connection_id: connectionId,
-      sender_type: senderType,
-      sender_id: senderId,
-      body,
-    }),
-  });
-
-export const getMessages = (connectionId) => request(`/api/messages?connection_id=${encodeURIComponent(connectionId)}`);
-
-export const generateMessage = ({ candidateId, employeeId, jobId, job }) =>
+export const generateMessage = ({ userId, employeeId, jobId, job }) =>
   request("/api/generate-message", {
     method: "POST",
     body: JSON.stringify({
-      candidate_id: candidateId,
+      user_id: userId,
       employee_id: employeeId,
       job_id: jobId,
       job,
     }),
   });
 
-export const getCareerCompanion = ({ candidateId, jobId, job, profile }) =>
+export const getCareerCompanion = ({ userId, jobId, job, profile }) =>
   request("/api/ai/career-companion", {
     method: "POST",
     body: JSON.stringify({
-      candidate_id: candidateId,
+      user_id: userId,
       job_id: jobId,
       job,
       profile,
+    }),
+  });
+
+export const uploadResume = (file) => {
+  const form = new FormData();
+  form.append("file", file);
+  return fetch(`${API_BASE}/api/profile/upload-resume`, { method: "POST", body: form })
+    .then((res) => {
+      if (!res.ok) return res.json().then((e) => { throw new Error(e.error || "Upload failed"); });
+      return res.json();
+    });
+};
+
+export const updateProfile = ({ userId, skills, education, experience, interests, targetCompanies, currentRole, targetRole, summary }) =>
+  request("/api/profile", {
+    method: "PUT",
+    body: JSON.stringify({
+      user_id: userId,
+      skills: skills || [],
+      education: education || [],
+      experience: experience || [],
+      interests: interests || [],
+      target_companies: targetCompanies || [],
+      current_role: currentRole || "",
+      target_role: targetRole || "",
+      summary: summary || "",
     }),
   });
