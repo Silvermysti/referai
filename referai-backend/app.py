@@ -12389,64 +12389,114 @@ def _gh_request(path):
 def _github_company_slug(company):
     """Normalise company name to a likely GitHub org slug."""
     slug = re.sub(r"[^a-z0-9]+", "", company.lower())
-    # Common aliases
-    aliases = {"wisdomtree": "wisdomtree", "googleinc": "google", "meta": "facebook",
-                "amazonwebservices": "aws", "flipkart": "flipkart-incubator"}
+    aliases = {
+        "googleinc": "google", "meta": "facebook",
+        "amazonwebservices": "aws", "flipkartincubator": "flipkart-incubator",
+    }
     return aliases.get(slug, slug)
 
 
-def _github_skills_from_repos(login, limit=5):
-    """Get top programming languages from a user's public repos."""
-    repos = _gh_request(f"/users/{login}/repos?sort=pushed&per_page={limit}&type=public")
-    if not isinstance(repos, list):
-        return []
-    langs = []
-    for repo in repos:
-        lang = repo.get("language")
-        if lang and lang not in langs:
-            langs.append(lang)
-    return langs[:8]
-
-
-def _github_infer_role(bio, company):
+def _github_infer_role(bio):
     """Best-effort role extraction from GitHub bio text."""
     if not bio:
         return "Software Engineer"
-    bio_lower = bio.lower()
-    for title in ["engineering manager", "staff engineer", "principal engineer",
-                  "senior software engineer", "software engineer", "frontend engineer",
-                  "backend engineer", "fullstack engineer", "data engineer",
-                  "ml engineer", "devops engineer", "sre", "product manager",
-                  "developer advocate", "solutions engineer"]:
-        if title in bio_lower:
+    b = bio.lower()
+    for title in [
+        "engineering manager", "staff engineer", "principal engineer",
+        "senior software engineer", "software engineer", "frontend engineer",
+        "backend engineer", "full stack engineer", "fullstack engineer",
+        "data engineer", "ml engineer", "machine learning engineer",
+        "devops engineer", "site reliability engineer", "sre",
+        "product manager", "developer advocate", "solutions engineer",
+        "marketing", "business development", "designer",
+    ]:
+        if title in b:
             return title.title()
-    # Fallback: first sentence of bio up to 40 chars
-    return (bio.split(".")[0].split("|")[0].split("@")[0].strip()[:40] or "Software Engineer")
+    return bio.split(".")[0].split("|")[0].split("@")[0].strip()[:50] or "Software Engineer"
 
 
-GITHUB_CACHE_TTL_HOURS = 24
-
-
-def fetch_github_employees(company, max_members=15):
+def _job_search_keywords(job_signal, max_keywords=3):
     """
-    Fetch employees at a company from GitHub.
-    Strategy:
-      1. Check SQLite cache (TTL 24h)
-      2. Try org members endpoint (/orgs/{slug}/members)
-      3. Fall back to user search (type:user company:{name})
-    Returns list of employee-like dicts ready for cosine matching.
+    Extract the most useful search keywords from a job signal string.
+    Picks short, common tech/domain words — avoids stop words and long phrases.
+    Used to narrow down GitHub user search results.
+    """
+    stop = {"and", "the", "for", "with", "you", "will", "our", "are",
+            "this", "that", "have", "from", "your", "work", "join",
+            "team", "role", "experience", "looking", "strong", "build",
+            "not", "all", "can", "new", "one", "use", "any"}
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9#+\-.]{1,20}", job_signal)
+    seen = set()
+    keywords = []
+    for w in words:
+        lw = w.lower()
+        if lw not in stop and lw not in seen and len(lw) > 2:
+            seen.add(lw)
+            keywords.append(w)
+        if len(keywords) >= max_keywords:
+            break
+    return keywords
+
+
+def _build_employee(login, profile, company, slug, now_iso_str):
+    """Build a normalised employee dict from a GitHub profile response."""
+    name = profile.get("name") or login
+    bio = profile.get("bio") or ""
+    email = profile.get("email") or ""
+    followers = profile.get("followers") or 0
+    github_url = profile.get("html_url") or f"https://github.com/{login}"
+    role = _github_infer_role(bio)
+
+    db_execute(
+        """INSERT OR REPLACE INTO github_employees_cache
+           (company_slug, login, name, role, bio, email, github_url, skills, followers, cached_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (slug, login, name, role, bio, email, github_url, "[]", followers, now_iso_str),
+    )
+    return {
+        "id": f"gh_{login}",
+        "name": name,
+        "company": company,
+        "company_slug": slug,
+        "role": role,
+        "department": "Engineering",
+        "seniority": "Unknown",
+        "bio": bio,
+        "github_url": github_url,
+        "email": email,
+        "skills": [],
+        "response_probability": min(90, 50 + followers // 20),
+        "vouch_tier": "Tier 2",
+        "reward": 10,
+        "education": [],
+        "experience": [],
+    }
+
+
+def fetch_github_employees(company, job_signal="", max_results=20):
+    """
+    Primary employee source — always tried first before seed DB.
+
+    Search strategy (results are merged and deduped):
+      1. Org members  — /orgs/{slug}/members  (no search rate limit)
+      2. Company search — type:user company:"{company}"
+      3. Keyword search — type:user company:"{company}" {top_keywords_from_job}
+
+    All results cached in SQLite for 24 h.
+    Cosine similarity ranking happens in /api/match after this returns.
     """
     if not GITHUB_PAT:
         return []
 
     slug = _github_company_slug(company)
     now = datetime.now(timezone.utc)
-    cutoff = now.isoformat()
+    now_str = now.isoformat()
 
-    # --- Check cache ---
+    # --- Serve from cache if fresh ---
     cached = db_query(
-        "SELECT * FROM github_employees_cache WHERE company_slug=? AND cached_at > datetime(?, '-24 hours')",
-        (slug, cutoff),
+        "SELECT * FROM github_employees_cache "
+        "WHERE company_slug=? AND cached_at > datetime(?, '-24 hours')",
+        (slug, now_str),
     )
     if cached:
         return [
@@ -12471,62 +12521,56 @@ def fetch_github_employees(company, max_members=15):
             for row in cached
         ]
 
-    # --- Fetch from GitHub ---
-    members = _gh_request(f"/orgs/{slug}/members?per_page={max_members}")
-    logins = []
-    if isinstance(members, list) and members:
-        logins = [m["login"] for m in members]
-    else:
-        # Fallback: search users by company name
-        from urllib.parse import quote as _quote
-        search = _gh_request(f"/search/users?q=company:{_quote(company)}+type:user&per_page={max_members}")
-        if isinstance(search, dict) and search.get("items"):
-            logins = [u["login"] for u in search["items"]]
+    from urllib.parse import quote as _q
 
-    if not logins:
+    logins_seen = set()
+    all_logins = []
+
+    # 1. Org members (core API — no search rate limit)
+    org_members = _gh_request(f"/orgs/{slug}/members?per_page=30")
+    if isinstance(org_members, list):
+        for m in org_members:
+            lg = m.get("login")
+            if lg and lg not in logins_seen:
+                logins_seen.add(lg)
+                all_logins.append(lg)
+
+    # 2. User search by company name (search API)
+    q_company = f'type:user+company:"{_q(company)}"'
+    search1 = _gh_request(f"/search/users?q={q_company}&per_page=15")
+    if isinstance(search1, dict):
+        for u in search1.get("items", []):
+            lg = u.get("login")
+            if lg and lg not in logins_seen:
+                logins_seen.add(lg)
+                all_logins.append(lg)
+
+    # 3. Keyword-enriched search — adds job-relevant people at the company
+    #    e.g. company:"Stripe" python distributed   →  finds engineers who mention
+    #    those skills in their bio/repos, narrowing to likely-relevant profiles.
+    if job_signal:
+        kws = _job_search_keywords(job_signal, max_keywords=3)
+        if kws:
+            kw_str = "+".join(_q(k) for k in kws)
+            q_kw = f'type:user+company:"{_q(company)}"+{kw_str}'
+            search2 = _gh_request(f"/search/users?q={q_kw}&per_page=10")
+            if isinstance(search2, dict):
+                for u in search2.get("items", []):
+                    lg = u.get("login")
+                    if lg and lg not in logins_seen:
+                        logins_seen.add(lg)
+                        all_logins.append(lg)
+
+    if not all_logins:
         return []
 
+    # Fetch full profiles (core API, 5000/hr limit — well within budget)
     employees = []
-    for login in logins[:max_members]:
+    for login in all_logins[:max_results]:
         profile = _gh_request(f"/users/{login}")
         if not isinstance(profile, dict):
             continue
-        name = profile.get("name") or login
-        bio = profile.get("bio") or ""
-        email = profile.get("email") or ""
-        followers = profile.get("followers") or 0
-        github_url = profile.get("html_url") or f"https://github.com/{login}"
-        role = _github_infer_role(bio, company)
-        # Skip per-user repo fetch to keep response time reasonable.
-        # Skills are inferred from bio text during cosine matching.
-        skills = []
-
-        # Cache row
-        db_execute(
-            """INSERT OR REPLACE INTO github_employees_cache
-               (company_slug, login, name, role, bio, email, github_url, skills, followers, cached_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (slug, login, name, role, bio, email, github_url, j(skills), followers, now.isoformat()),
-        )
-
-        employees.append({
-            "id": f"gh_{login}",
-            "name": name,
-            "company": company,
-            "company_slug": slug,
-            "role": role,
-            "department": "Engineering",
-            "seniority": "Unknown",
-            "bio": bio,
-            "github_url": github_url,
-            "email": email,
-            "skills": skills,
-            "response_probability": min(90, 50 + followers // 20),
-            "vouch_tier": "Tier 2",
-            "reward": 10,
-            "education": [],
-            "experience": [],
-        })
+        employees.append(_build_employee(login, profile, company, slug, now_str))
 
     return employees
 
@@ -12598,22 +12642,26 @@ def match():
     if not job:
         return jsonify({"error": "Job not found."}), 404
 
-    company_slug_key = re.sub(r"[^a-z0-9]+", "", (job.get("company") or "").lower())
-    employees = [_deserialize_employee(r) for r in
-                 db_query("SELECT * FROM employees WHERE company_slug=?", (company_slug_key,))]
+    job_signal = f"{job.get('role','')} {job.get('description','')} {' '.join(job.get('skills',[]))}"
 
-    # If no seed employees, try GitHub
-    source = "seed"
-    if not employees and job.get("company"):
-        employees = fetch_github_employees(job["company"])
-        source = "github" if employees else "none"
+    # GitHub is the primary source — fetches org members + company search +
+    # keyword-enriched search so results are relevant to the job description.
+    source = "github"
+    employees = fetch_github_employees(job.get("company", ""), job_signal=job_signal) if job.get("company") else []
+
+    # Fall back to seed employees if GitHub returns nothing
+    # (company has no GitHub org and no users listing it as employer)
+    if not employees:
+        company_slug_key = re.sub(r"[^a-z0-9]+", "", (job.get("company") or "").lower())
+        employees = [_deserialize_employee(r) for r in
+                     db_query("SELECT * FROM employees WHERE company_slug=?", (company_slug_key,))]
+        source = "seed" if employees else "none"
 
     connected_ids = set()
     if user_id:
         rows = db_query("SELECT employee_id FROM user_employee_connections WHERE user_id=?", (user_id,))
         connected_ids = {r["employee_id"] for r in rows}
 
-    job_signal = f"{job.get('role','')} {job.get('description','')} {' '.join(job.get('skills',[]))}"
     user_signal = user_signal_text(user) if user else ""
 
     # Precompute user college and company sets for badge detection
