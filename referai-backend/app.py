@@ -10950,6 +10950,100 @@ def extract_resume_regex_fallback(text):
 
 
 
+_EXTRACT_JOB_PROMPT = """You are a job posting parser. Extract structured information from the job description below.
+Return ONLY a valid JSON object — no markdown, no extra text — with exactly this shape:
+{
+  "role": "Job title",
+  "company": "Company name",
+  "location": "City / Remote / Hybrid / Not listed",
+  "level": "Internship / New Grad / Mid-level / Senior / Not specified",
+  "skills": ["skill1", "skill2", "skill3"],
+  "description": "One paragraph summary of what the role involves"
+}
+Rules:
+- skills: technical skills, tools, languages, frameworks required — keep them short (1–4 words each), 4–10 skills
+- level: pick the closest match from the list above
+- company: exact company name as written, or empty string if not found
+- If a field is unclear, use an empty string — do not guess
+- Return at least 4 skills if mentioned anywhere in the posting
+
+Job description:
+"""
+
+
+def extract_job_with_gemini(job_text):
+    """Extract structured job info from raw description text using Gemini."""
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+        return None
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": _EXTRACT_JOB_PROMPT + job_text[:8000]}]}],
+        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 512},
+    }).encode()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        return _parse_llm_json(data["candidates"][0]["content"]["parts"][0]["text"])
+    except Exception:
+        return None
+
+
+def extract_job_with_deepseek(job_text):
+    """Extract structured job info from raw description text using DeepSeek."""
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "your_deepseek_api_key_here":
+        return None
+    payload = json.dumps({
+        "model": DEEPSEEK_MODEL,
+        "messages": [{"role": "user", "content": _EXTRACT_JOB_PROMPT + job_text[:8000]}],
+        "temperature": 0.1,
+        "max_tokens": 512,
+    }).encode()
+    req = Request(
+        f"{DEEPSEEK_BASE_URL}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+    )
+    try:
+        with urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        return _parse_llm_json(data["choices"][0]["message"]["content"])
+    except Exception:
+        return None
+
+
+def extract_job_regex_fallback(text):
+    """Best-effort regex keyword extraction from job description text."""
+    skill_keywords = re.findall(
+        r"\b(Python|Java|JavaScript|TypeScript|Go|Rust|C\+\+|React|Node\.js|"
+        r"FastAPI|Django|Flask|PostgreSQL|MySQL|Redis|Docker|Kubernetes|AWS|"
+        r"GCP|Azure|TensorFlow|PyTorch|SQL|Git|Linux|Bash|REST|GraphQL|"
+        r"Kafka|Spark|Scala|Ruby|Swift|Kotlin|Flutter|React\s*Native|"
+        r"Machine\s*Learning|Deep\s*Learning|NLP|CI/CD|Terraform|Ansible)\b",
+        text, re.IGNORECASE,
+    )
+    skills = list(dict.fromkeys(s.strip() for s in skill_keywords))
+
+    # Try to extract company from "at Company" or "Company is hiring" patterns
+    company = ""
+    company_match = re.search(r"(?:at|@)\s+([A-Z][A-Za-z0-9& ]{1,30}?)(?:\s*[,.|]|\s+is\s|\s+we\b)", text)
+    if company_match:
+        company = company_match.group(1).strip()
+
+    # Try to find role from first non-empty line or a heading pattern
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    role = lines[0][:80] if lines else ""
+
+    return {
+        "role": role,
+        "company": company,
+        "location": "Not listed",
+        "level": "Not specified",
+        "skills": skills[:10],
+        "description": " ".join(lines[:3])[:300],
+    }
+
+
 def _deserialize_employee(row):
     if not row:
         return None
@@ -12274,13 +12368,43 @@ def connections():
 @app.route("/api/parse-job", methods=["POST"])
 def parse_job():
     payload = request.get_json(silent=True) or {}
-    raw_original = (payload.get("job_url") or payload.get("job_id") or "").strip()
-    raw_input = raw_original.lower()
+    job_description = (payload.get("job_description") or "").strip()
+    # Legacy fallback: still accept job_url / job_id for backward compat
+    raw_legacy = (payload.get("job_url") or payload.get("job_id") or "").strip()
+
+    # --- New path: description text provided ---
+    if job_description:
+        extracted = extract_job_with_deepseek(job_description)
+        provider = "deepseek" if extracted else None
+        if not extracted:
+            extracted = extract_job_with_gemini(job_description)
+            provider = "gemini" if extracted else None
+        if not extracted:
+            extracted = extract_job_regex_fallback(job_description)
+            provider = "regex"
+
+        selected = {
+            "id": f"job_desc_{uuid4().hex[:10]}",
+            "company": extracted.get("company") or "Unknown company",
+            "role": extracted.get("role") or "Unknown role",
+            "location": extracted.get("location") or "Not listed",
+            "level": extracted.get("level") or "Not specified",
+            "skills": extracted.get("skills") or [],
+            "description": extracted.get("description") or job_description[:400],
+            "source_url": "",
+            "is_live_extract": True,
+            "extraction_notes": [f"Extracted by {provider}"],
+        }
+        _upsert_job(selected)
+        confidence = 0.95 if provider in ("deepseek", "gemini") else 0.65
+        return jsonify({"job": selected, "source": "description", "confidence": confidence, "provider": provider})
+
+    # --- Legacy path: URL or job ID ---
+    raw_input = raw_legacy.lower()
     if not raw_input:
-        return jsonify({"error": "Add a job link or job ID to search."}), 400
+        return jsonify({"error": "Paste a job description to search."}), 400
 
     selected = None
-
     seed_jobs = [_deserialize_job(r) for r in db_query("SELECT * FROM jobs WHERE is_live_extract=0")]
     for job in seed_jobs:
         if job["company"].lower() in raw_input or job["role"].lower().split()[0] in raw_input or job["id"] in raw_input:
@@ -12288,11 +12412,11 @@ def parse_job():
             break
 
     if selected is None:
-        selected = parse_live_job(raw_original)
+        selected = parse_live_job(raw_legacy)
         _upsert_job(selected)
 
     confidence = 0.93 if selected.get("description") and not selected.get("description", "").startswith("Job details were inferred") else 0.62
-    return jsonify({"job": selected, "source": raw_original, "confidence": confidence})
+    return jsonify({"job": selected, "source": raw_legacy, "confidence": confidence})
 
 
 @app.route("/api/match", methods=["POST"])

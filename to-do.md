@@ -4,51 +4,37 @@
 
 ## 1. Profile Enrichment (Resume Upload + Manual Entry)
 
-**Goal:** Let users build a rich profile so the cosine similarity matching uses real data instead of the sparse seed fields.
+**Status: Complete**
 
-### What to build
+### What was built
 
 **Resume upload**
-- File upload input (PDF/DOCX) on the signup page and in a profile settings page
-- Backend: parse with `pdfplumber` (PDF) and `python-docx` (DOCX) to extract skills, education, and experience
-- Show extracted fields as a preview the user can correct before saving
-- Write confirmed fields into `users` table columns
+- File upload input (PDF/DOCX) on the profile settings page
+- Backend: parses with `pdfplumber` (PDF) and `python-docx` (DOCX) to extract skills, education, and experience
+- `ExtractionPreview.jsx` — shows extracted fields the user can correct before saving
+- Gemini + DeepSeek as alternative LLM extractors (configurable via `.env`)
 
 **Manual entry**
-- Profile settings page (accessible after login) with sections for:
-  - Skills — tag-style input (add/remove individual skills)
-  - Education — add multiple entries: college, degree, branch, graduation year
-  - Experience — add multiple entries: company, role, duration, one-line description
-  - Target role and target company
-- Changes take effect on the next `/api/match` call immediately
-
-### Components needed
-
-| Layer | Component |
-|---|---|
-| DB | No schema change — existing `skills`, `education`, `experience` columns used |
-| Backend | `POST /api/profile/upload-resume` — parse file, return extracted fields |
-| Backend | `PUT /api/profile` — partial update of any user fields |
-| Frontend | `Profile.jsx` — new page with all sections |
-| Frontend | `SkillTagInput.jsx` — add/remove skill chips |
-| Frontend | `EducationEditor.jsx` — list of education entries with add/remove |
-| Frontend | `ExperienceEditor.jsx` — list of experience entries with add/remove |
-| Frontend | Resume upload section with extraction preview and confirm step |
-| `api.js` | `uploadResume(file)`, `updateProfile(fields)` |
+- `Profile.jsx` — full settings page with sections for skills, education, experience, target role, and target company
+- `TagInput.jsx` — tag-style add/remove skill chips
+- `AutocompleteInput.jsx` — autocomplete for skill/company/college dropdowns
+- Education and experience entries editable inline
 
 ### Implementation checklist
 
-- [ ] `pdfplumber` + `python-docx` added to `requirements.txt`
-- [ ] `POST /api/profile/upload-resume`
-- [ ] `PUT /api/profile`
-- [ ] `Profile.jsx` page wired to `/profile` route in `App.jsx`
-- [ ] `SkillTagInput.jsx`, `EducationEditor.jsx`, `ExperienceEditor.jsx`
-- [ ] Resume upload + extraction preview
-- [ ] Re-run `/api/match` after profile save so results refresh
+- [x] `pdfplumber` + `python-docx` added to `requirements.txt`
+- [x] `POST /api/profile/upload-resume`
+- [x] `PUT /api/profile`
+- [x] `Profile.jsx` page wired to `/profile` route in `App.jsx`
+- [x] `TagInput.jsx`, `ExtractionPreview.jsx`, `AutocompleteInput.jsx`
+- [x] Resume upload + extraction preview with confirm step
+- [x] `/api/match` uses updated profile fields immediately after save
 
 ---
 
 ## 2. Live Job & Internship Discovery
+
+**Status: Not started**
 
 **Goal:** Surface real open roles matching each user's target companies and skills.
 
@@ -89,6 +75,8 @@ Start with Adzuna + Remotive. Confirm ToS before building.
 ---
 
 ## 3. Outreach Tracker (Message Sent + Reply Tracking)
+
+**Status: Not started**
 
 **Goal:** Let users record which employees they have already messaged and whether they received a reply. Use the aggregated response rate as an additional match signal once enough data exists.
 
@@ -145,62 +133,41 @@ CREATE TABLE IF NOT EXISTS outreach_log (
 
 ## 4. Connection, Alumni, and Coworker Badges
 
-**Goal:** Surface relationship context on every employee card so users immediately know who they have a warm path to.
+**Status: Complete**
 
-### Badge definitions
+### What was built
 
-| Badge | Colour | Condition |
-|---|---|---|
-| **Connected** | Green | `user_employee_connections` row exists for this user + employee pair. Already tracked. |
-| **Alumni** | Amber | At least one college in `user.education[].college` matches a college in `employee.education[].college` (case-insensitive) |
-| **Coworker** | Purple | At least one company in `user.experience[].company` matches a company in `employee.experience[].company` (case-insensitive) |
-
-Alumni and coworker matches also get a small score bonus (+5 each, stackable) in `/api/match` because shared background makes outreach warmer.
-
-### Components needed
-
-| Layer | Component |
-|---|---|
-| DB | No change — uses existing `education` and `experience` JSON columns on both tables |
-| Backend | `/api/match` update — compute `is_alumni` and `is_coworker` for each employee result by comparing user and employee education/experience lists; add score bonus |
-| Backend | Helper `shared_colleges(user, emp)` and `shared_companies(user, emp)` — return bool |
-| Frontend | `Student.jsx` employee cards: show "Alumni" and "Coworker" badges alongside existing "Connected" badge |
-| Frontend | `Student.jsx` employee detail panel: show relationship summary line ("Same college: IIT Bombay") |
+- `/api/match` computes `is_alumni` and `is_coworker` for each employee by comparing user and employee education/experience lists
+- Alumni (+5) and Coworker (+5) score bonuses applied in `/api/match`, stackable with each other
+- `Student.jsx` employee cards show **Alumni** (amber) and **Coworker** (purple) badges alongside the existing **Connected** (green) badge
+- Employee detail panel shows which college or company is shared (e.g. "Alumni · IIT Bombay")
 
 ### Implementation checklist
 
-- [ ] `shared_colleges(user, emp)` helper in `app.py`
-- [ ] `shared_companies(user, emp)` helper in `app.py`
-- [ ] `/api/match` computes `is_alumni`, `is_coworker`, adds `+5` bonus per match to score
-- [ ] Employee cards in `Student.jsx` show Alumni (amber) and Coworker (purple) badges
-- [ ] Employee detail panel shows which college/company is shared (e.g. "IIT Bombay · both attended")
+- [x] `shared_colleges` / `shared_companies` logic in `/api/match`
+- [x] `/api/match` computes `is_alumni`, `is_coworker`, adds `+5` bonus per match to score
+- [x] Employee cards in `Student.jsx` show Alumni (amber) and Coworker (purple) badges
+- [x] Employee detail panel shows which college/company is shared
 
 ---
 
 ## 5. Student vs Professional Distinction
 
-**Goal:** Know whether a user is a student or a working professional so the app can surface the right opportunities (internships vs full-time) and weight matches appropriately.
+**Status: Partial — frontend detection only**
 
-### How it affects matching
+`Student.jsx` infers whether an *employee* is a student from their education dates, and shows a "Student" badge on their card. The **user**-side `user_type` field (student vs professional) is not yet stored or used for filtering job types, seniority bonuses, or career companion tone.
 
-| Signal | Student | Professional |
-|---|---|---|
-| Job type shown first | Internships, new-grad roles | Full-time, experienced roles |
-| Employee seniority bonus | +5 for Junior / New Grad employees (more relatable referrers for interns) | No seniority bonus — all levels equally weighted |
-| Discover-jobs filter (feature 2) | Filter for internship/entry-level listings | Filter for full-time/mid-to-senior listings |
-| Career companion framing | Tips oriented toward first job, internship convert | Tips oriented toward role change, promotion |
-
-### Components needed
+### Remaining work
 
 | Layer | Component |
 |---|---|
 | DB | Add `user_type TEXT DEFAULT 'student'` column to `users` table (`'student'` or `'professional'`) |
 | Backend | `init_db()` — add column with `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` so existing DBs are not broken |
 | Backend | Signup endpoint — accept and save `user_type` field |
-| Backend | `/api/match` — read `user.user_type`; if `student`, apply Junior/New Grad seniority bonus (+5); adjust career companion prompt tone |
+| Backend | `/api/match` — apply Junior/New Grad seniority bonus (+5) for students; adjust career companion prompt tone |
 | Backend | `/api/discover-jobs` (feature 2) — pass `user_type` as a filter hint to job APIs |
 | Frontend | `Auth.jsx` signup form — add a toggle or select: "I am a student" / "I am a working professional" |
-| Frontend | `Student.jsx` — show a small label on the job card ("Internship match" or "Full-time match") based on `user.user_type` and job description keywords |
+| Frontend | `Student.jsx` — show job card label ("Internship match" / "Full-time match") based on `user.user_type` |
 
 ### Implementation checklist
 

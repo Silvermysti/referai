@@ -8,7 +8,7 @@ import {
 } from "../services/api";
 
 const Student = ({ user }) => {
-  const [jobUrl, setJobUrl] = useState("");
+  const [jobDescription, setJobDescription] = useState("");
   const [job, setJob] = useState(null);
   const [matches, setMatches] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -19,10 +19,11 @@ const Student = ({ user }) => {
   const [loading, setLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
+  const [expandedId, setExpandedId] = useState(null);
 
   const analyzeOpportunity = async () => {
-    if (!jobUrl.trim()) {
-      setError("Enter a job link to search.");
+    if (!jobDescription.trim()) {
+      setError("Paste a job description to find referrers.");
       return;
     }
 
@@ -32,11 +33,12 @@ const Student = ({ user }) => {
     setCopilot(null);
 
     try {
-      const parsed = await parseJob(jobUrl);
+      const parsed = await parseJob(jobDescription);
       const ranked = await getMatches({ jobId: parsed.job.id, job: parsed.job, userId: user?.id });
       setJob(parsed.job);
       setJobConfidence(parsed.confidence);
       setMatches(ranked.matches || []);
+      setExpandedId(null);
 
       const firstEmployee = ranked.matches?.[0] || null;
       setSelected(firstEmployee);
@@ -100,27 +102,27 @@ const Student = ({ user }) => {
       <section className="mb-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.75fr)]">
         <div>
           <h2 className="text-3xl font-black tracking-tight text-main md:text-5xl">Find the right referrer.</h2>
-          <p className="mt-4 max-w-2xl text-base leading-7 text-muted">Paste a role link to rank employees at that company who can refer you.</p>
+          <p className="mt-4 max-w-2xl text-base leading-7 text-muted">Paste any job description to rank employees at that company who can give you the best referral.</p>
         </div>
 
         <div className="surface-flat p-5">
-          <label className="text-sm font-black text-main" htmlFor="job-url">
-            Job link
+          <label className="text-sm font-black text-main" htmlFor="job-desc">
+            Job description
           </label>
-          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
-            <input
-              id="job-url"
-              value={jobUrl}
-              onChange={(event) => setJobUrl(event.target.value)}
-              className="field"
-              placeholder="Job URL"
-            />
-            <button onClick={analyzeOpportunity} disabled={loading} className="btn-primary min-h-11 px-5 text-sm">
-              {loading ? "Searching" : "Search"}
-            </button>
-          </div>
+          <p className="mt-1 mb-3 text-xs text-muted">
+            Copy the full job posting from LinkedIn, Greenhouse, Lever, or anywhere else and paste it here.
+          </p>
+          <textarea
+            id="job-desc"
+            value={jobDescription}
+            onChange={(event) => setJobDescription(event.target.value)}
+            className="field min-h-[120px] resize-y"
+            placeholder="Paste job description here — role, company, requirements, responsibilities…"
+          />
+          <button onClick={analyzeOpportunity} disabled={loading} className="btn-primary mt-3 w-full py-3 text-sm">
+            {loading ? "Analysing…" : "Find referrers"}
+          </button>
           {error && <p className="mt-3 text-sm font-bold text-rose-600">{error}</p>}
-          <p className="mt-3 text-xs font-bold text-muted">Reads the page when possible; blocked pages use the URL.</p>
         </div>
       </section>
 
@@ -153,38 +155,72 @@ const Student = ({ user }) => {
 
       <section className={`grid gap-6 ${matches.length ? "xl:grid-cols-[0.9fr_1.1fr]" : ""}`}>
         <div className="space-y-4">
-          {matches.map((employee) => (
-            <button
-              key={employee.id}
-              onClick={() => selectEmployee(employee)}
-              className={`surface-flat w-full p-5 text-left transition hover:-translate-y-0.5 ${
-                selected?.id === employee.id ? "ring-2 ring-[var(--primary)]" : ""
-              }`}
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-lg font-black text-main">{employee.name}</h3>
-                  <p className="mt-1 text-sm text-muted">{employee.role} · {employee.department}</p>
-                  <p className="mt-1 text-xs font-bold text-muted">{employee.seniority}</p>
-                </div>
-                <div className="flex flex-col items-end gap-2">
-                  <div className="rounded-lg bg-[rgb(33_85_217_/_0.12)] px-3 py-2 text-center">
-                    <p className="text-xs font-bold text-[var(--primary)]">Match</p>
-                    <p className="text-2xl font-black text-[var(--primary-strong)]">{employee.match_score}</p>
-                  </div>
-                  {employee.is_connected && <span className="badge badge-green">Connected</span>}
-                  {employee.is_alumni && <span className="badge badge-amber">Alumni</span>}
-                  {employee.is_coworker && <span className="badge badge-purple">Coworker</span>}
-                </div>
-              </div>
+          {matches.map((employee) => {
+            const currentYear = new Date().getFullYear();
+            const isStudent = (employee.education || []).some(
+              (e) => e.graduation_year && parseInt(e.graduation_year) > currentYear
+            );
+            const userSkillsLower = new Set((user?.skills || []).map((s) => s.toLowerCase()));
+            const commonSkills = (employee.skills || []).filter((s) => userSkillsLower.has(s.toLowerCase()));
+            const isExpanded = expandedId === employee.id;
 
-              <div className="mt-4 flex flex-wrap gap-2">
-                {(Array.isArray(employee.skills) ? employee.skills : []).slice(0, 5).map((skill) => (
-                  <span key={skill} className="badge badge-blue">{skill}</span>
-                ))}
+            return (
+              <div key={employee.id} className={`surface-flat w-full text-left transition hover:-translate-y-0.5 ${selected?.id === employee.id ? "ring-2 ring-[var(--primary)]" : ""}`}>
+                <button
+                  className="w-full p-5 text-left"
+                  onClick={() => selectEmployee(employee)}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <h3 className="text-lg font-black text-main">{employee.name}</h3>
+                      <p className="mt-1 text-sm text-muted">{employee.role} · {employee.department}</p>
+                      <p className="mt-1 text-xs font-bold text-muted">
+                        {isStudent ? "Student" : employee.seniority}
+                      </p>
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <div className="rounded-lg bg-[rgb(33_85_217_/_0.12)] px-3 py-2 text-center">
+                        <p className="text-xs font-bold text-[var(--primary)]">Match</p>
+                        <p className="text-2xl font-black text-[var(--primary-strong)]">{employee.match_score}%</p>
+                      </div>
+                      {isStudent && <span className="badge badge-blue">Student</span>}
+                      {employee.is_connected && <span className="badge badge-green">Connected</span>}
+                      {employee.is_alumni && <span className="badge badge-amber">Alumni{employee.shared_college ? ` · ${employee.shared_college}` : ""}</span>}
+                      {employee.is_coworker && <span className="badge badge-purple">Coworker{employee.shared_company ? ` · ${employee.shared_company}` : ""}</span>}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {(employee.skills || []).slice(0, 5).map((skill) => (
+                      <span key={skill} className={`badge ${userSkillsLower.has(skill.toLowerCase()) ? "badge-green" : "badge-blue"}`}>{skill}</span>
+                    ))}
+                  </div>
+                </button>
+
+                {commonSkills.length > 0 && (
+                  <div className="border-t border-app px-5 pb-1">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-between py-3 text-xs font-bold text-muted hover:text-main"
+                      onClick={(e) => { e.stopPropagation(); setExpandedId(isExpanded ? null : employee.id); }}
+                    >
+                      <span>{commonSkills.length} skill{commonSkills.length !== 1 ? "s" : ""} in common</span>
+                      <span className="text-base leading-none">{isExpanded ? "▲" : "▼"}</span>
+                    </button>
+                    {isExpanded && (
+                      <div className="pb-4">
+                        <div className="flex flex-wrap gap-2">
+                          {commonSkills.map((skill) => (
+                            <span key={skill} className="badge badge-green">{skill}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
 
         {selected ? (
@@ -303,7 +339,7 @@ const Student = ({ user }) => {
             <div>
               <p className="text-lg font-black text-main">No search yet</p>
               <p className="mt-2 max-w-md text-sm leading-6 text-muted">
-                Add a job link to see matching referrers and referral options.
+                Paste a job description to see matching referrers at that company.
               </p>
             </div>
           </div>
