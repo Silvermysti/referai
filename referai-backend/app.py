@@ -10961,18 +10961,25 @@ _EXTRACT_JOB_PROMPT = """You are a job posting parser. Extract structured inform
 Return ONLY a valid JSON object — no markdown, no extra text — with exactly this shape:
 {
   "role": "Job title",
-  "company": "Company name",
+  "company": "Company name (legal entity or brand, exactly as written)",
+  "subsidiary": "Specific brand / product / sub-company if different from company (e.g. 'Ring' for an Amazon posting, 'Instagram' for Meta) — empty string if same as company",
+  "team": "Team or department name if mentioned (e.g. 'Video Streaming Quality', 'Platform Engineering') — empty string if not mentioned",
   "location": "City / Remote / Hybrid / Not listed",
+  "location_city": "City name only, no country (e.g. 'Madrid', 'Bangalore', 'San Francisco') — empty string if not mentioned",
   "level": "Internship / New Grad / Mid-level / Senior / Not specified",
   "skills": ["skill1", "skill2", "skill3"],
+  "tech_stack": ["tool1", "tool2"],
   "description": "One paragraph summary of what the role involves"
 }
 Rules:
-- skills: technical skills, tools, languages, frameworks required — keep them short (1–4 words each), 4–10 skills
+- skills: technical skills, tools, languages, frameworks required — keep them short (1–4 words each), 4–10 items
+- tech_stack: specific tools, platforms, codecs, frameworks mentioned in the team/company description (not just requirements) — 0–6 items, empty array if none
 - level: pick the closest match from the list above
-- company: exact company name as written, or empty string if not found
-- If a field is unclear, use an empty string — do not guess
-- Return at least 4 skills if mentioned anywhere in the posting
+- company: exact company name as written in the posting, or empty string if not found
+- subsidiary: only fill if the posting clearly names a specific brand/sub-team different from the parent company
+- team: the team name as stated, e.g. "The Video Streaming Quality (VQ) team" → "Video Streaming Quality"
+- location_city: city where the office is, extracted from phrases like "Madrid Tech Hub", "Bangalore office", "New York HQ"
+- If a field is unclear, use an empty string or empty array — do not guess
 
 Job description:
 """
@@ -11057,12 +11064,36 @@ def extract_job_regex_fallback(text):
             role = line[:80]
             break
 
+    # Extract subsidiary brand (e.g. "Ring" in Amazon job, "Instagram" in Meta job)
+    subsidiary = ""
+    m = re.search(r"(?:team\s+at|group\s+at|division\s+at)\s+([A-Z][A-Za-z0-9& ]{1,25}?)(?:\s+focuses|\s+is|\s*[,.\n])", text)
+    if m:
+        brand = m.group(1).strip()
+        if brand.lower() != company.lower():
+            subsidiary = brand
+
+    # Extract team name: "The XYZ team at …" or "About The Team … XYZ team"
+    team = ""
+    m = re.search(r"[Tt]he\s+([A-Z][A-Za-z0-9 ()&]{3,40}?)\s+(?:team|group|org)\b", text)
+    if m:
+        team = m.group(1).strip()
+
+    # Extract city from "Madrid Tech Hub", "Bangalore office", "New York HQ"
+    location_city = ""
+    m = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:Tech\s+Hub|Office|HQ|Headquarters|Campus)\b", text)
+    if m:
+        location_city = m.group(1).strip()
+
     return {
         "role": role,
         "company": company,
+        "subsidiary": subsidiary,
+        "team": team,
         "location": "Not listed",
+        "location_city": location_city,
         "level": "Not specified",
         "skills": skills[:10],
+        "tech_stack": [],
         "description": " ".join(lines[:3])[:300],
     }
 
@@ -12806,20 +12837,35 @@ def _build_employee(login, profile, company, slug, now_iso_str):
     }
 
 
-def fetch_github_employees(company, job_signal="", max_results=20):
+def fetch_github_employees(
+    company,
+    job_signal="",
+    max_results=20,
+    subsidiary="",
+    team="",
+    tech_stack=None,
+    location_city="",
+):
     """
     Primary employee source — always tried first before seed DB.
 
     Search strategy (results are merged and deduped):
-      1. Org members  — /orgs/{slug}/members  (no search rate limit)
-      2. Company search — type:user company:"{company}"
-      3. Keyword search — type:user company:"{company}" {top_keywords_from_job}
+      1. Subsidiary org members — if a subsidiary/brand was extracted
+         (e.g. 'Ring' → ring-doorbell org), search it directly first
+      2. Primary org members — /orgs/{slug}/members
+      3. Extra org members — subsidiary orgs from _COMPANY_EXTRA_ORGS
+      4. Company field search — type:user company:"{company}"
+      5. Keyword + org search — org:{slug} {job_keywords}
+      6. Tech-stack + location probe — org:{slug} {tech_stack_terms} location:{city}
+      7. Last resort fallback — global keyword search if nothing found
 
     All results cached in SQLite for 24 h.
     Cosine similarity ranking happens in /api/match after this returns.
     """
     if not GITHUB_PAT:
         return []
+
+    tech_stack = tech_stack or []
 
     slug = _github_company_slug(company)
     now = datetime.now(timezone.utc)
@@ -12869,19 +12915,24 @@ def fetch_github_employees(company, job_signal="", max_results=20):
                     logins_seen.add(lg)
                     all_logins.append(lg)
 
-    # 1. Org members for primary slug (core API — no search rate limit)
+    # 1. Subsidiary org first — if a sub-brand was extracted, search it directly.
+    #    e.g. Amazon job mentioning Ring → search ring-doorbell org for people
+    #    who work specifically on Ring, not just Amazon at large.
+    sub_slug = _github_company_slug(subsidiary) if subsidiary else ""
+    if sub_slug and sub_slug != slug:
+        _collect_org_members(sub_slug, limit=20)
+
+    # 2. Primary org members
     _collect_org_members(slug, limit=30)
 
-    # 1b. Extra orgs for companies that have multiple GitHub orgs
-    #     e.g. Amazon → also try 'aws', 'ring-doorbell', 'alexa'
+    # 2b. Extra orgs for companies with multiple GitHub orgs
     for extra_org in _COMPANY_EXTRA_ORGS.get(slug, []):
-        if len(all_logins) < max_results:
+        if sub_slug != extra_org and len(all_logins) < max_results:
             _collect_org_members(extra_org, limit=15)
 
-    # 2. User search by company name (search API).
-    #    Note: many large companies (Amazon, Google) have employees who don't
-    #    fill in the company field, so this often returns 0. We still try it as
-    #    a supplement — it finds employees who *do* list the company name.
+    # 3. Company field search — finds employees who explicitly list the company.
+    #    Note: many large companies (Amazon, Google) employees rarely fill this,
+    #    so count can be 0. Still useful for mid-size companies.
     q_company = f'type:user+company:"{_q(company)}"'
     search1 = _gh_request(f"/search/users?q={q_company}&per_page=15")
     if isinstance(search1, dict):
@@ -12891,9 +12942,8 @@ def fetch_github_employees(company, job_signal="", max_results=20):
                 logins_seen.add(lg)
                 all_logins.append(lg)
 
-    # 3. Keyword-enriched org search — find org members who match the job's
-    #    keywords. Useful when org members list is large (e.g. amzn has 1000s).
-    #    Query: org:{slug} {keywords}  — searches within org members' profiles.
+    # 4. Job keyword probe — narrows org members to those relevant to this role.
+    #    Query: org:{slug} {top_job_keywords}
     if job_signal and all_logins:
         kws = _job_search_keywords(job_signal, max_keywords=3)
         if kws:
@@ -12907,16 +12957,46 @@ def fetch_github_employees(company, job_signal="", max_results=20):
                         logins_seen.add(lg)
                         all_logins.append(lg)
 
-    # 3b. If still nothing found, try keyword-only search (no org/company filter)
-    #     This is a last resort — returns GitHub users globally who mention the
-    #     company name and job keywords, which usually finds relevant people.
+    # 5. Tech-stack probe — find org members who mention specific tools from the
+    #    job's tech stack (e.g. "WebRTC", "FFmpeg", "H.265").
+    #    Optionally filtered by city when a location was extracted.
+    if tech_stack and all_logins:
+        # Pick the 2 most distinctive tech-stack terms (avoid generic ones)
+        ts_terms = [t for t in tech_stack if len(t) >= 4][:2]
+        if ts_terms:
+            ts_str = "+".join(_q(t) for t in ts_terms)
+            loc_filter = f"+location:{_q(location_city)}" if location_city else ""
+            q_ts = f'type:user+org:{slug}+{ts_str}{loc_filter}'
+            search_ts = _gh_request(f"/search/users?q={q_ts}&per_page=10")
+            if isinstance(search_ts, dict):
+                for u in search_ts.get("items", []):
+                    lg = u.get("login")
+                    if lg and lg not in logins_seen:
+                        logins_seen.add(lg)
+                        all_logins.append(lg)
+
+    # 6. Team keyword probe — search for people who mention the team name in bio.
+    #    e.g. "Video Streaming Quality" or "Platform Engineering"
+    if team and all_logins:
+        team_kw = "+".join(_q(w) for w in team.split()[:3] if len(w) >= 4)
+        if team_kw:
+            q_team = f'type:user+org:{slug}+{team_kw}'
+            search_team = _gh_request(f"/search/users?q={q_team}&per_page=10")
+            if isinstance(search_team, dict):
+                for u in search_team.get("items", []):
+                    lg = u.get("login")
+                    if lg and lg not in logins_seen:
+                        logins_seen.add(lg)
+                        all_logins.append(lg)
+
+    # 7. Last-resort fallback — global keyword search if org probes returned nothing.
     if not all_logins and job_signal:
         kws = _job_search_keywords(job_signal, max_keywords=2)
-        company_kw = re.sub(r"[^a-zA-Z0-9 ]+", "", company).strip().split()[0]  # first word only
+        company_kw = re.sub(r"[^a-zA-Z0-9 ]+", "", company).strip().split()[0]
         q_fallback = f'type:user+{_q(company_kw)}+{"+".join(_q(k) for k in kws)}'
-        search3 = _gh_request(f"/search/users?q={q_fallback}&per_page=15")
-        if isinstance(search3, dict):
-            for u in search3.get("items", []):
+        search_fb = _gh_request(f"/search/users?q={q_fallback}&per_page=15")
+        if isinstance(search_fb, dict):
+            for u in search_fb.get("items", []):
                 lg = u.get("login")
                 if lg and lg not in logins_seen:
                     logins_seen.add(lg)
@@ -12956,13 +13036,17 @@ def parse_job():
 
         selected = {
             "id": f"job_desc_{uuid4().hex[:10]}",
-            "company": extracted.get("company") or "Unknown company",
-            "role": extracted.get("role") or "Unknown role",
-            "location": extracted.get("location") or "Not listed",
-            "level": extracted.get("level") or "Not specified",
-            "skills": extracted.get("skills") or [],
-            "description": extracted.get("description") or job_description[:400],
-            "source_url": "",
+            "company":       extracted.get("company") or "Unknown company",
+            "subsidiary":    extracted.get("subsidiary") or "",
+            "team":          extracted.get("team") or "",
+            "role":          extracted.get("role") or "Unknown role",
+            "location":      extracted.get("location") or "Not listed",
+            "location_city": extracted.get("location_city") or "",
+            "level":         extracted.get("level") or "Not specified",
+            "skills":        extracted.get("skills") or [],
+            "tech_stack":    extracted.get("tech_stack") or [],
+            "description":   extracted.get("description") or job_description[:400],
+            "source_url":    "",
             "is_live_extract": True,
             "extraction_notes": [f"Extracted by {provider}"],
         }
@@ -13008,7 +13092,14 @@ def match():
     # GitHub is the primary source — fetches org members + company search +
     # keyword-enriched search so results are relevant to the job description.
     source = "github"
-    employees = fetch_github_employees(job.get("company", ""), job_signal=job_signal) if job.get("company") else []
+    employees = fetch_github_employees(
+        job.get("company", ""),
+        job_signal=job_signal,
+        subsidiary=job.get("subsidiary") or "",
+        team=job.get("team") or "",
+        tech_stack=job.get("tech_stack") or [],
+        location_city=job.get("location_city") or "",
+    ) if job.get("company") else []
 
     # Fall back to seed employees if GitHub returns nothing
     # (company has no GitHub org and no users listing it as employer)
