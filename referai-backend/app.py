@@ -12772,13 +12772,41 @@ def _job_search_keywords(job_signal, max_keywords=3):
 # Web-search snippet employee discovery
 # ---------------------------------------------------------------------------
 
-_PROFILE_SEARCH_PROMPT = """List {n} software engineers at {target}{location}{skills}.
+_PROFILE_SEARCH_PROMPT = """List {n} {role_type} at {target}{location}{skills}.
 Return ONLY JSON array:
 [{{"name":"Full Name","role":"Job Title","linkedin_url":"https://linkedin.com/in/slug or empty","skills":["skill"]}}]
 No text outside JSON. Empty linkedin_url if unsure."""
 
 
-def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_stack=None, location_city="", max_results=15):
+def _derive_professional_type(role: str) -> str:
+    """Map a job role string to a natural-language professional type for the search prompt."""
+    r = role.lower()
+    if any(k in r for k in ("engineer", "developer", "devops", "sre", "backend", "frontend",
+                             "fullstack", "full stack", "mobile", "ios", "android", "ml ",
+                             "machine learning", "data scientist", "security")):
+        return "software engineers"
+    if any(k in r for k in ("product manager", " pm ", "product lead")):
+        return "product managers"
+    if any(k in r for k in ("marketplace", "e-commerce", "ecommerce", "seller", "vendor",
+                             "flipkart", "amazon seller", "listing")):
+        return "e-commerce professionals"
+    if any(k in r for k in ("data analyst", "analytics", "business analyst", "bi ")):
+        return "data analysts"
+    if any(k in r for k in ("marketing", "growth", "brand", "content", "seo", "performance")):
+        return "marketing professionals"
+    if any(k in r for k in ("design", "ux", "ui ", "user experience")):
+        return "designers"
+    if any(k in r for k in ("sales", "account exec", "account manager", "account lead",
+                             "business development", "bd ")):
+        return "sales professionals"
+    if any(k in r for k in ("operations", "supply chain", "logistics", "fulfilment", "fulfillment")):
+        return "operations professionals"
+    # Generic fallback — still produces real names rather than an empty list
+    return "professionals"
+
+
+def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_stack=None,
+                                   location_city="", max_results=15, role=""):
     """Find employees using DeepSeek's training knowledge of public profiles."""
     if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "your_deepseek_api_key_here":
         return []
@@ -12791,11 +12819,12 @@ def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_s
     ts  = [t for t in tech_stack if len(t) >= 4][:3]
     skill_hints = list(dict.fromkeys(kws + ts))[:4]
 
-    skills_str   = f" skilled in {', '.join(skill_hints)}" if skill_hints else ""
-    location_str = f" in {location_city}" if location_city else ""
+    skills_str    = f" skilled in {', '.join(skill_hints)}" if skill_hints else ""
+    location_str  = f" in {location_city}" if location_city else ""
+    role_type     = _derive_professional_type(role or job_signal)
 
     prompt = _PROFILE_SEARCH_PROMPT.format(
-        n=max_results, target=target,
+        n=max_results, target=target, role_type=role_type,
         location=location_str, skills=skills_str,
     )
 
@@ -12923,6 +12952,7 @@ def fetch_github_employees(
     team="",
     tech_stack=None,
     location_city="",
+    role="",
 ):
     """
     Primary employee source — always tried first before seed DB.
@@ -13091,25 +13121,23 @@ def fetch_github_employees(
             continue
         employees.append(_build_employee(login, profile, company, slug, now_str))
 
-    # Supplement with search-snippet employees when GitHub returns few results.
-    # Threshold: if we have fewer than 8 GitHub profiles, pad with snippet-
-    # discovered people so the user always sees a useful list.
-    SNIPPET_SUPPLEMENT_THRESHOLD = 8
-    if len(employees) < SNIPPET_SUPPLEMENT_THRESHOLD:
-        snippet_emps = fetch_search_snippet_employees(
-            company,
-            job_signal=job_signal,
-            subsidiary=subsidiary,
-            tech_stack=tech_stack,
-            location_city=location_city,
-            max_results=max_results - len(employees),
-        )
-        # Deduplicate by name against already-found GitHub profiles
-        gh_names = {e["name"].lower() for e in employees}
-        for emp in snippet_emps:
-            if emp["name"].lower() not in gh_names:
-                employees.append(emp)
-                gh_names.add(emp["name"].lower())
+    # Always supplement with DeepSeek AI-suggested profiles.
+    # Adds people DeepSeek knows about that didn't appear in the GitHub org,
+    # deduped by name. Capped at 10 extra so we don't bloat the list.
+    ai_emps = fetch_search_snippet_employees(
+        company,
+        job_signal=job_signal,
+        subsidiary=subsidiary,
+        tech_stack=tech_stack,
+        location_city=location_city,
+        max_results=10,
+        role=role,
+    )
+    gh_names = {e["name"].lower() for e in employees}
+    for emp in ai_emps:
+        if emp["name"].lower() not in gh_names:
+            employees.append(emp)
+            gh_names.add(emp["name"].lower())
 
     return employees
 
@@ -13187,6 +13215,7 @@ def match():
     # GitHub is the primary source — fetches org members + company search +
     # keyword-enriched search so results are relevant to the job description.
     source = "github"
+    job_role = job.get("role", "")
     employees = fetch_github_employees(
         job.get("company", ""),
         job_signal=job_signal,
@@ -13194,12 +13223,12 @@ def match():
         team=job.get("team") or "",
         tech_stack=job.get("tech_stack") or [],
         location_city=job.get("location_city") or "",
+        role=job_role,
     ) if job.get("company") else []
 
-    # If GitHub returned nothing at all (no org, no users), try search snippets
-    # as a standalone source before touching the seed DB.
+    # If GitHub returned nothing, DeepSeek already ran inside fetch_github_employees.
+    # For the no-GitHub case (no org found), run DeepSeek standalone.
     if not employees:
-        source = "snippet"
         employees = fetch_search_snippet_employees(
             job.get("company", ""),
             job_signal=job_signal,
@@ -13207,7 +13236,9 @@ def match():
             tech_stack=job.get("tech_stack") or [],
             location_city=job.get("location_city") or "",
             max_results=20,
+            role=job_role,
         )
+        source = "ai" if employees else source
 
     # Last resort: seed database (static, demo-quality data)
     if not employees:
@@ -13215,6 +13246,13 @@ def match():
         employees = [_deserialize_employee(r) for r in
                      db_query("SELECT * FROM employees WHERE company_slug=?", (company_slug_key,))]
         source = "seed" if employees else "none"
+
+    # Reflect mixed sources accurately
+    source_types = {e.get("_source_type", "github") for e in employees}
+    if "github" in source_types and "ai" in source_types:
+        source = "github+ai"
+    elif "ai" in source_types:
+        source = "ai"
 
     connected_ids = set()
     if user_id:
