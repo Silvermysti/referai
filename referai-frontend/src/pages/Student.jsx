@@ -294,16 +294,23 @@ const Student = ({ user }) => {
                   <span key={skill} className="badge badge-blue">{skill}</span>
                 ))}
               </div>
-              {selected.linkedin_url && (
-                <a
-                  href={selected.linkedin_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn-secondary mt-4 inline-block px-4 py-2 text-sm"
-                >
-                  View LinkedIn
-                </a>
-              )}
+              <div className="mt-4 flex flex-wrap gap-2">
+                {selected.linkedin_url && (
+                  <a href={selected.linkedin_url} target="_blank" rel="noopener noreferrer" className="btn-secondary px-4 py-2 text-sm">
+                    LinkedIn
+                  </a>
+                )}
+                {selected.github_url && (
+                  <a href={selected.github_url} target="_blank" rel="noopener noreferrer" className="btn-secondary px-4 py-2 text-sm">
+                    GitHub
+                  </a>
+                )}
+                {selected.email && (
+                  <a href={`mailto:${selected.email}`} className="btn-secondary px-4 py-2 text-sm">
+                    {selected.email}
+                  </a>
+                )}
+              </div>
             </div>
 
             <div className="surface-flat p-5">

@@ -11127,6 +11127,9 @@ DEEPSEEK_MODEL = "deepseek-chat"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 
+GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
+GITHUB_API = "https://api.github.com"
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
 
@@ -12365,6 +12368,169 @@ def connections():
 
 
 
+def _gh_request(path):
+    """Make an authenticated GitHub API request. Returns parsed JSON or None on error."""
+    if not GITHUB_PAT:
+        return None
+    url = path if path.startswith("http") else f"{GITHUB_API}{path}"
+    req = Request(url, headers={
+        "Authorization": f"Bearer {GITHUB_PAT}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "ReferAI/1.0",
+    })
+    try:
+        with urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def _github_company_slug(company):
+    """Normalise company name to a likely GitHub org slug."""
+    slug = re.sub(r"[^a-z0-9]+", "", company.lower())
+    # Common aliases
+    aliases = {"wisdomtree": "wisdomtree", "googleinc": "google", "meta": "facebook",
+                "amazonwebservices": "aws", "flipkart": "flipkart-incubator"}
+    return aliases.get(slug, slug)
+
+
+def _github_skills_from_repos(login, limit=5):
+    """Get top programming languages from a user's public repos."""
+    repos = _gh_request(f"/users/{login}/repos?sort=pushed&per_page={limit}&type=public")
+    if not isinstance(repos, list):
+        return []
+    langs = []
+    for repo in repos:
+        lang = repo.get("language")
+        if lang and lang not in langs:
+            langs.append(lang)
+    return langs[:8]
+
+
+def _github_infer_role(bio, company):
+    """Best-effort role extraction from GitHub bio text."""
+    if not bio:
+        return "Software Engineer"
+    bio_lower = bio.lower()
+    for title in ["engineering manager", "staff engineer", "principal engineer",
+                  "senior software engineer", "software engineer", "frontend engineer",
+                  "backend engineer", "fullstack engineer", "data engineer",
+                  "ml engineer", "devops engineer", "sre", "product manager",
+                  "developer advocate", "solutions engineer"]:
+        if title in bio_lower:
+            return title.title()
+    # Fallback: first sentence of bio up to 40 chars
+    return (bio.split(".")[0].split("|")[0].split("@")[0].strip()[:40] or "Software Engineer")
+
+
+GITHUB_CACHE_TTL_HOURS = 24
+
+
+def fetch_github_employees(company, max_members=15):
+    """
+    Fetch employees at a company from GitHub.
+    Strategy:
+      1. Check SQLite cache (TTL 24h)
+      2. Try org members endpoint (/orgs/{slug}/members)
+      3. Fall back to user search (type:user company:{name})
+    Returns list of employee-like dicts ready for cosine matching.
+    """
+    if not GITHUB_PAT:
+        return []
+
+    slug = _github_company_slug(company)
+    now = datetime.now(timezone.utc)
+    cutoff = now.isoformat()
+
+    # --- Check cache ---
+    cached = db_query(
+        "SELECT * FROM github_employees_cache WHERE company_slug=? AND cached_at > datetime(?, '-24 hours')",
+        (slug, cutoff),
+    )
+    if cached:
+        return [
+            {
+                "id": f"gh_{row['login']}",
+                "name": row["name"] or row["login"],
+                "company": company,
+                "company_slug": slug,
+                "role": row["role"] or "Software Engineer",
+                "department": "Engineering",
+                "seniority": "Unknown",
+                "bio": row["bio"] or "",
+                "github_url": row["github_url"] or f"https://github.com/{row['login']}",
+                "email": row["email"] or "",
+                "skills": jl(row["skills"]),
+                "response_probability": min(90, 50 + (row["followers"] or 0) // 20),
+                "vouch_tier": "Tier 2",
+                "reward": 10,
+                "education": [],
+                "experience": [],
+            }
+            for row in cached
+        ]
+
+    # --- Fetch from GitHub ---
+    members = _gh_request(f"/orgs/{slug}/members?per_page={max_members}")
+    logins = []
+    if isinstance(members, list) and members:
+        logins = [m["login"] for m in members]
+    else:
+        # Fallback: search users by company name
+        from urllib.parse import quote as _quote
+        search = _gh_request(f"/search/users?q=company:{_quote(company)}+type:user&per_page={max_members}")
+        if isinstance(search, dict) and search.get("items"):
+            logins = [u["login"] for u in search["items"]]
+
+    if not logins:
+        return []
+
+    employees = []
+    for login in logins[:max_members]:
+        profile = _gh_request(f"/users/{login}")
+        if not isinstance(profile, dict):
+            continue
+        name = profile.get("name") or login
+        bio = profile.get("bio") or ""
+        email = profile.get("email") or ""
+        followers = profile.get("followers") or 0
+        github_url = profile.get("html_url") or f"https://github.com/{login}"
+        role = _github_infer_role(bio, company)
+        # Skip per-user repo fetch to keep response time reasonable.
+        # Skills are inferred from bio text during cosine matching.
+        skills = []
+
+        # Cache row
+        db_execute(
+            """INSERT OR REPLACE INTO github_employees_cache
+               (company_slug, login, name, role, bio, email, github_url, skills, followers, cached_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (slug, login, name, role, bio, email, github_url, j(skills), followers, now.isoformat()),
+        )
+
+        employees.append({
+            "id": f"gh_{login}",
+            "name": name,
+            "company": company,
+            "company_slug": slug,
+            "role": role,
+            "department": "Engineering",
+            "seniority": "Unknown",
+            "bio": bio,
+            "github_url": github_url,
+            "email": email,
+            "skills": skills,
+            "response_probability": min(90, 50 + followers // 20),
+            "vouch_tier": "Tier 2",
+            "reward": 10,
+            "education": [],
+            "experience": [],
+        })
+
+    return employees
+
+
 @app.route("/api/parse-job", methods=["POST"])
 def parse_job():
     payload = request.get_json(silent=True) or {}
@@ -12436,6 +12602,12 @@ def match():
     employees = [_deserialize_employee(r) for r in
                  db_query("SELECT * FROM employees WHERE company_slug=?", (company_slug_key,))]
 
+    # If no seed employees, try GitHub
+    source = "seed"
+    if not employees and job.get("company"):
+        employees = fetch_github_employees(job["company"])
+        source = "github" if employees else "none"
+
     connected_ids = set()
     if user_id:
         rows = db_query("SELECT employee_id FROM user_employee_connections WHERE user_id=?", (user_id,))
@@ -12477,7 +12649,7 @@ def match():
         })
 
     ranked = sorted(results, key=lambda x: x["match_score"], reverse=True)
-    return jsonify({"job": job, "matches": ranked, "user": user})
+    return jsonify({"job": job, "matches": ranked, "user": user, "source": source})
 
 
 @app.route("/api/ai/career-companion", methods=["POST"])
@@ -12847,6 +13019,19 @@ def init_db():
         CREATE TABLE IF NOT EXISTS phone_otps (
             phone TEXT PRIMARY KEY,
             otp   TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS github_employees_cache (
+            company_slug TEXT NOT NULL,
+            login        TEXT NOT NULL,
+            name         TEXT,
+            role         TEXT,
+            bio          TEXT,
+            email        TEXT,
+            github_url   TEXT,
+            skills       TEXT DEFAULT '[]',
+            followers    INTEGER DEFAULT 0,
+            cached_at    TEXT NOT NULL,
+            PRIMARY KEY (company_slug, login)
         );
     """)
     conn.commit()
