@@ -11184,11 +11184,8 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
 GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
 GITHUB_API = "https://api.github.com"
 
-# --- Web search (for snippet-based employee discovery) ---
-# Priority: Brave Search (free 2000/mo) → Google Custom Search (free 100/day)
-BRAVE_SEARCH_API_KEY  = os.environ.get("BRAVE_SEARCH_API_KEY", "")
-GOOGLE_CSE_API_KEY    = os.environ.get("GOOGLE_CSE_API_KEY", "")
-GOOGLE_CSE_ID         = os.environ.get("GOOGLE_CSE_ID", "")
+# Web search for employee discovery reuses GEMINI_API_KEY via Google Search
+# grounding — no additional keys required.
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
@@ -12808,59 +12805,64 @@ def _job_search_keywords(job_signal, max_keywords=3):
 # Web-search snippet employee discovery
 # ---------------------------------------------------------------------------
 
-def _brave_search(query, count=10):
-    """Call Brave Search API; return list of result dicts."""
-    if not BRAVE_SEARCH_API_KEY:
-        return []
-    from urllib.parse import quote as _q
-    url = f"https://api.search.brave.com/res/v1/web/search?q={_q(query)}&count={count}"
-    req = Request(url, headers={
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip",
-        "X-Subscription-Token": BRAVE_SEARCH_API_KEY,
-    })
-    try:
-        with urlopen(req, timeout=10) as r:
-            raw = r.read()
-            # Brave may return gzip
-            try:
-                import gzip as _gz
-                raw = _gz.decompress(raw)
-            except Exception:
-                pass
-            data = json.loads(raw)
-        return data.get("web", {}).get("results", [])
-    except Exception:
+def _gemini_google_search(query):
+    """
+    Use Gemini with Google Search grounding to search the web.
+
+    Gemini routes the query through Google Search and returns grounded
+    results in groundingMetadata.groundingChunks — each chunk has a
+    real URL and title taken from the live Google index.
+
+    Returns a list of {title, url, description} dicts in the same shape
+    expected by _parse_linkedin_snippet(), so the rest of the pipeline
+    is unchanged.
+
+    Uses the already-configured GEMINI_API_KEY — no extra keys needed.
+    """
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
         return []
 
-
-def _google_cse_search(query, count=10):
-    """Call Google Custom Search API; return list of result dicts."""
-    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_ID:
-        return []
-    from urllib.parse import quote as _q
+    payload = json.dumps({
+        "contents": [{"parts": [{"text": query}]}],
+        "tools": [{"googleSearch": {}}],          # camelCase for Gemini 2.x
+        "generationConfig": {"temperature": 0, "maxOutputTokens": 512},
+    }).encode()
     url = (
-        f"https://www.googleapis.com/customsearch/v1"
-        f"?key={GOOGLE_CSE_API_KEY}&cx={GOOGLE_CSE_ID}"
-        f"&q={_q(query)}&num={min(count, 10)}"
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     )
     try:
-        with urlopen(Request(url), timeout=10) as r:
+        with urlopen(Request(url, data=payload, headers={"Content-Type": "application/json"}), timeout=20) as r:
             data = json.loads(r.read())
-        # Normalise to same shape as Brave results
-        return [
-            {"title": i.get("title",""), "url": i.get("link",""), "description": i.get("snippet","")}
-            for i in data.get("items", [])
-        ]
     except Exception:
         return []
 
+    results = []
+    candidate = (data.get("candidates") or [{}])[0]
 
-def _web_search(query, count=10):
-    """Brave first, Google CSE fallback."""
-    results = _brave_search(query, count)
-    if not results:
-        results = _google_cse_search(query, count)
+    # groundingMetadata.groundingChunks holds the actual URLs Google returned
+    chunks = (
+        candidate.get("groundingMetadata", {})
+        .get("groundingChunks", [])
+    )
+    for chunk in chunks:
+        web = chunk.get("web", {})
+        uri   = web.get("uri", "")
+        title = web.get("title", "")
+        if uri:
+            results.append({"title": title, "url": uri, "description": ""})
+
+    # Also extract any inline URLs from the response text as a supplement
+    text = ""
+    for part in candidate.get("content", {}).get("parts", []):
+        text += part.get("text", "")
+
+    # Gemini sometimes mentions LinkedIn URLs in the text body
+    for m in re.finditer(r"https?://(?:www\.)?linkedin\.com/in/[^\s)\]\"']+", text):
+        link = m.group(0).rstrip(".,;")
+        if not any(r["url"] == link for r in results):
+            results.append({"title": "", "url": link, "description": text[:200]})
+
     return results
 
 
@@ -12956,13 +12958,16 @@ def _parse_linkedin_snippet(result, company):
 
 def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_stack=None, location_city="", max_results=15):
     """
-    Discover employees via web-search snippets (Brave / Google CSE).
+    Discover employees via Gemini + Google Search grounding.
 
-    Builds several targeted queries and deduplicates by name.
-    Returns employee dicts in the same shape as GitHub employees.
-    Results are NOT cached (snippets change; search quota is the limit).
+    Gemini routes each query through Google Search and returns grounded
+    results (real URLs from the live Google index).  We target LinkedIn
+    /in/ profile pages and parse each result into an employee dict.
+
+    Requires: GEMINI_API_KEY (already used for job extraction — no new keys).
+    Results are NOT cached (live search; Gemini handles rate limiting).
     """
-    if not (BRAVE_SEARCH_API_KEY or GOOGLE_CSE_API_KEY):
+    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
         return []
 
     tech_stack = tech_stack or []
@@ -12975,11 +12980,11 @@ def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_s
             seen_names.add(emp["name"].lower())
             employees.append(emp)
 
-    # Build a pool of targeted queries — run them in order, stop early
+    # Build targeted queries — Gemini+Google finds the best LinkedIn profiles
     target = subsidiary or company
     queries = []
 
-    # 1. Subsidiary-specific (most focused)
+    # 1. Subsidiary-specific (most focused, e.g. "Ring" not "Amazon")
     if subsidiary and subsidiary.lower() != company.lower():
         queries.append(f'site:linkedin.com/in "{subsidiary}" software engineer')
 
@@ -12998,14 +13003,14 @@ def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_s
     if location_city:
         queries.append(f'site:linkedin.com/in "{target}" {location_city} engineer')
 
-    # 5. Generic fallback
+    # 5. Generic fallbacks
     queries.append(f'site:linkedin.com/in "{target}" software engineer')
     queries.append(f'site:linkedin.com/in "{target}" developer')
 
     for query in queries:
         if len(employees) >= max_results:
             break
-        for result in _web_search(query, count=8):
+        for result in _gemini_google_search(query):
             _add(result)
             if len(employees) >= max_results:
                 break
