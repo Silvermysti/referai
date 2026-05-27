@@ -10910,21 +10910,6 @@ def extract_with_deepseek(resume_text):
         return None
 
 
-def extract_with_gemini(resume_text):
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        return None
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": _EXTRACT_PROMPT + resume_text[:8000]}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024},
-    }).encode()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return _parse_llm_json(data["candidates"][0]["content"]["parts"][0]["text"])
-    except Exception:
-        return None
 
 
 def extract_resume_regex_fallback(text):
@@ -10985,22 +10970,6 @@ Job description:
 """
 
 
-def extract_job_with_gemini(job_text):
-    """Extract structured job info from raw description text using Gemini."""
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        return None
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": _EXTRACT_JOB_PROMPT + job_text[:8000]}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 512},
-    }).encode()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return _parse_llm_json(data["candidates"][0]["content"]["parts"][0]["text"])
-    except Exception:
-        return None
 
 
 def extract_job_with_deepseek(job_text):
@@ -11178,14 +11147,14 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
-
 GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
 GITHUB_API = "https://api.github.com"
 
-# Web search for employee discovery reuses GEMINI_API_KEY via Google Search
-# grounding — no additional keys required.
+# Web search — Google Custom Search API (free 100 queries/day)
+# Create CSE: https://programmablesearchengine.google.com/
+# Get API key: https://console.cloud.google.com/apis/credentials
+GOOGLE_CSE_API_KEY = os.environ.get("GOOGLE_CSE_API_KEY", "")
+GOOGLE_CSE_ID      = os.environ.get("GOOGLE_CSE_ID", "")
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
@@ -12805,65 +12774,31 @@ def _job_search_keywords(job_signal, max_keywords=3):
 # Web-search snippet employee discovery
 # ---------------------------------------------------------------------------
 
-def _gemini_google_search(query):
+def _google_cse_search(query, count=10):
     """
-    Use Gemini with Google Search grounding to search the web.
+    Google Custom Search API — returns real Google results for a query.
 
-    Gemini routes the query through Google Search and returns grounded
-    results in groundingMetadata.groundingChunks — each chunk has a
-    real URL and title taken from the live Google index.
-
-    Returns a list of {title, url, description} dicts in the same shape
-    expected by _parse_linkedin_snippet(), so the rest of the pipeline
-    is unchanged.
-
-    Uses the already-configured GEMINI_API_KEY — no extra keys needed.
+    Requires GOOGLE_CSE_API_KEY and GOOGLE_CSE_ID in .env.
+    Free tier: 100 queries/day.
+    Returns [{title, url, description}] compatible with _parse_linkedin_snippet().
     """
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_ID:
         return []
-
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": query}]}],
-        "tools": [{"googleSearch": {}}],          # camelCase for Gemini 2.x
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 512},
-    }).encode()
+    from urllib.parse import quote as _q
     url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        f"https://www.googleapis.com/customsearch/v1"
+        f"?key={GOOGLE_CSE_API_KEY}&cx={GOOGLE_CSE_ID}"
+        f"&q={_q(query)}&num={min(count, 10)}"
     )
     try:
-        with urlopen(Request(url, data=payload, headers={"Content-Type": "application/json"}), timeout=20) as r:
+        with urlopen(Request(url), timeout=15) as r:
             data = json.loads(r.read())
+        return [
+            {"title": i.get("title", ""), "url": i.get("link", ""), "description": i.get("snippet", "")}
+            for i in data.get("items", [])
+        ]
     except Exception:
         return []
-
-    results = []
-    candidate = (data.get("candidates") or [{}])[0]
-
-    # groundingMetadata.groundingChunks holds the actual URLs Google returned
-    chunks = (
-        candidate.get("groundingMetadata", {})
-        .get("groundingChunks", [])
-    )
-    for chunk in chunks:
-        web = chunk.get("web", {})
-        uri   = web.get("uri", "")
-        title = web.get("title", "")
-        if uri:
-            results.append({"title": title, "url": uri, "description": ""})
-
-    # Also extract any inline URLs from the response text as a supplement
-    text = ""
-    for part in candidate.get("content", {}).get("parts", []):
-        text += part.get("text", "")
-
-    # Gemini sometimes mentions LinkedIn URLs in the text body
-    for m in re.finditer(r"https?://(?:www\.)?linkedin\.com/in/[^\s)\]\"']+", text):
-        link = m.group(0).rstrip(".,;")
-        if not any(r["url"] == link for r in results):
-            results.append({"title": "", "url": link, "description": text[:200]})
-
-    return results
 
 
 def _parse_linkedin_snippet(result, company):
@@ -12964,10 +12899,10 @@ def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_s
     results (real URLs from the live Google index).  We target LinkedIn
     /in/ profile pages and parse each result into an employee dict.
 
-    Requires: GEMINI_API_KEY (already used for job extraction — no new keys).
-    Results are NOT cached (live search; Gemini handles rate limiting).
+    Requires: GOOGLE_CSE_API_KEY + GOOGLE_CSE_ID in .env (free 100/day).
+    Results are NOT cached (live search).
     """
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
+    if not GOOGLE_CSE_API_KEY or not GOOGLE_CSE_ID:
         return []
 
     tech_stack = tech_stack or []
@@ -13010,7 +12945,7 @@ def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_s
     for query in queries:
         if len(employees) >= max_results:
             break
-        for result in _gemini_google_search(query):
+        for result in _google_cse_search(query):
             _add(result)
             if len(employees) >= max_results:
                 break
@@ -13284,9 +13219,6 @@ def parse_job():
         extracted = extract_job_with_deepseek(job_description)
         provider = "deepseek" if extracted else None
         if not extracted:
-            extracted = extract_job_with_gemini(job_description)
-            provider = "gemini" if extracted else None
-        if not extracted:
             extracted = extract_job_regex_fallback(job_description)
             provider = "regex"
 
@@ -13307,7 +13239,7 @@ def parse_job():
             "extraction_notes": [f"Extracted by {provider}"],
         }
         _upsert_job(selected)
-        confidence = 0.95 if provider in ("deepseek", "gemini") else 0.65
+        confidence = 0.95 if provider == "deepseek" else 0.65
         return jsonify({"job": selected, "source": "description", "confidence": confidence, "provider": provider})
 
     # --- Legacy path: URL or job ID ---
@@ -13621,9 +13553,6 @@ def upload_resume():
 
     extracted = extract_with_deepseek(resume_text)
     provider = "deepseek" if extracted is not None else None
-    if not extracted:
-        extracted = extract_with_gemini(resume_text)
-        provider = "gemini" if extracted is not None else None
     if not extracted:
         extracted = extract_resume_regex_fallback(resume_text)
         provider = "regex"
