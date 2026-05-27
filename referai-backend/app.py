@@ -10810,9 +10810,16 @@ def employee_signal_text(emp):
     edu = " ".join(" ".join(filter(None, [e.get("college"), e.get("branch")])) for e in education)
     exp = " ".join(" ".join(filter(None, [e.get("role"), e.get("description")])) for e in experience)
     skills_safe = [s for s in skills if isinstance(s, str)]
+    bio = emp.get("bio", "")
+    role = emp.get("role", "")
+    # For GitHub employees (sparse profiles) repeat bio and role so TF-IDF
+    # has enough signal to compute a non-zero cosine similarity.
+    is_github = (emp.get("id") or "").startswith("gh_")
+    bio_part = (bio + " " + bio) if is_github and bio else bio
+    role_part = (role + " " + role) if is_github and role else role
     return " ".join(filter(None, [
-        emp.get("name", ""), emp.get("role", ""), emp.get("department", ""),
-        " ".join(skills_safe), emp.get("bio", ""), edu, exp,
+        emp.get("name", ""), role_part, emp.get("department", ""),
+        " ".join(skills_safe), bio_part, edu, exp,
     ]))
 
 
@@ -12081,6 +12088,31 @@ def find_user(user_id):
 
 
 def find_employee(employee_id):
+    if not employee_id:
+        return None
+    # GitHub employees are stored in the cache table, not in employees
+    if employee_id.startswith("gh_"):
+        login = employee_id[3:]
+        row = db_query_one("SELECT * FROM github_employees_cache WHERE login=?", (login,))
+        if row:
+            return {
+                "id": employee_id,
+                "name": row["name"] or login,
+                "company": row.get("company_slug", ""),
+                "role": row["role"] or "Software Engineer",
+                "department": "Engineering",
+                "seniority": "Unknown",
+                "bio": (row["bio"] or "").replace("\r\n", " ").strip(),
+                "github_url": row["github_url"] or f"https://github.com/{login}",
+                "email": row["email"] or "",
+                "skills": jl(row["skills"]),
+                "response_probability": min(90, 50 + (row["followers"] or 0) // 20),
+                "vouch_tier": "Tier 2",
+                "reward": 10,
+                "education": [],
+                "experience": [],
+            }
+        return None
     row = db_query_one("SELECT * FROM employees WHERE id=?", (employee_id,))
     return _deserialize_employee(row) if row else None
 
@@ -12154,12 +12186,9 @@ def filter_profiles(profiles, search="", skill="", role=""):
 
 def find_job(job_id):
     if not job_id:
-        row = db_query_one("SELECT * FROM jobs WHERE is_live_extract=0 ORDER BY rowid LIMIT 1")
-    else:
-        row = db_query_one("SELECT * FROM jobs WHERE id=?", (job_id,))
-        if not row:
-            row = db_query_one("SELECT * FROM jobs WHERE is_live_extract=0 ORDER BY rowid LIMIT 1")
-    return _deserialize_job(row)
+        return None
+    row = db_query_one("SELECT * FROM jobs WHERE id=?", (job_id,))
+    return _deserialize_job(row) if row else None
 
 
 
@@ -12396,23 +12425,85 @@ def _github_company_slug(company):
     return aliases.get(slug, slug)
 
 
+_KNOWN_ROLE_TITLES = [
+    "engineering manager", "staff software engineer", "principal engineer",
+    "senior software engineer", "senior engineer", "software engineer",
+    "frontend engineer", "backend engineer", "full stack engineer",
+    "fullstack engineer", "data engineer", "ml engineer",
+    "machine learning engineer", "devops engineer",
+    "site reliability engineer", "sre", "platform engineer",
+    "infrastructure engineer", "security engineer", "mobile engineer",
+    "ios engineer", "android engineer", "product manager",
+    "developer advocate", "solutions engineer", "solution architect",
+    "solutions architect", "developer productivity", "developer experience",
+    "marketing", "business development", "designer", "ux designer",
+    "intern", "software development engineer",
+]
+
+# Bio patterns that are NOT roles — redirect/personal note noise
+_BIO_NOISE_PREFIXES = (
+    "personal account", "my personal", "this is", "base account",
+    "opinions", "tinkerer", "that's", "the ", "just a ",
+)
+
+
 def _github_infer_role(bio):
-    """Best-effort role extraction from GitHub bio text."""
+    """Extract a meaningful job title from a GitHub bio.
+
+    Returns 'Software Engineer' if the bio doesn't contain a recognisable title
+    (avoids noise like 'Personal account: @foo' or 'The Stripe version of @x').
+    """
     if not bio:
         return "Software Engineer"
-    b = bio.lower()
-    for title in [
-        "engineering manager", "staff engineer", "principal engineer",
-        "senior software engineer", "software engineer", "frontend engineer",
-        "backend engineer", "full stack engineer", "fullstack engineer",
-        "data engineer", "ml engineer", "machine learning engineer",
-        "devops engineer", "site reliability engineer", "sre",
-        "product manager", "developer advocate", "solutions engineer",
-        "marketing", "business development", "designer",
-    ]:
+    # Normalise: strip carriage returns, collapse whitespace
+    bio_clean = re.sub(r"\s+", " ", bio.replace("\r\n", " ").replace("\r", " ")).strip()
+    b = bio_clean.lower()
+
+    # Skip bios that are clearly redirect/personal notes
+    if any(b.startswith(prefix) for prefix in _BIO_NOISE_PREFIXES):
+        return "Software Engineer"
+
+    # Check for known title substrings
+    for title in _KNOWN_ROLE_TITLES:
         if title in b:
             return title.title()
-    return bio.split(".")[0].split("|")[0].split("@")[0].strip()[:50] or "Software Engineer"
+
+    # Try the first segment (before . | @ \n) and accept only if it contains a job keyword
+    first = re.split(r"[.|@\n]", bio_clean)[0].strip()
+    job_words = {"engineer", "developer", "manager", "designer", "analyst",
+                 "scientist", "consultant", "architect", "lead", "head",
+                 "director", "intern", "researcher", "advocate", "librarian",
+                 "productivity", "reliability", "platform", "security"}
+    if any(w in first.lower() for w in job_words):
+        return first[:60]
+
+    return "Software Engineer"
+
+
+_TECH_SKILL_PATTERN = re.compile(
+    r"\b(Python|Go|Golang|Rust|Java|JavaScript|TypeScript|Ruby|Swift|Kotlin|"
+    r"Scala|C\+\+|React|Vue|Angular|Node\.js|Django|FastAPI|Flask|Spring|Rails|"
+    r"PostgreSQL|MySQL|SQLite|Redis|Kafka|Elasticsearch|MongoDB|"
+    r"Docker|Kubernetes|Terraform|AWS|GCP|Azure|Linux|Bash|"
+    r"TensorFlow|PyTorch|machine learning|deep learning|NLP|"
+    r"GraphQL|REST|gRPC|WebAssembly|WASM|Distributed Systems|"
+    r"Canva|PowerPoint|HubSpot|Salesforce|Figma|Sketch|Notion)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_skills_from_text(text):
+    """Pull recognised tech/tool keywords out of any free-form text string."""
+    if not text:
+        return []
+    found = _TECH_SKILL_PATTERN.findall(text)
+    seen, skills = set(), []
+    for s in found:
+        norm = s.lower()
+        if norm not in seen:
+            seen.add(norm)
+            skills.append(s)
+    return skills
 
 
 def _job_search_keywords(job_signal, max_keywords=3):
@@ -12441,17 +12532,21 @@ def _job_search_keywords(job_signal, max_keywords=3):
 def _build_employee(login, profile, company, slug, now_iso_str):
     """Build a normalised employee dict from a GitHub profile response."""
     name = profile.get("name") or login
-    bio = profile.get("bio") or ""
+    # Normalise bio: strip carriage returns, collapse whitespace
+    raw_bio = profile.get("bio") or ""
+    bio = re.sub(r"\s+", " ", raw_bio.replace("\r\n", " ").replace("\r", " ")).strip()
     email = profile.get("email") or ""
     followers = profile.get("followers") or 0
     github_url = profile.get("html_url") or f"https://github.com/{login}"
     role = _github_infer_role(bio)
+    # Extract skills from bio text so cosine similarity has something to work with
+    skills = _extract_skills_from_text(bio)
 
     db_execute(
         """INSERT OR REPLACE INTO github_employees_cache
            (company_slug, login, name, role, bio, email, github_url, skills, followers, cached_at)
            VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (slug, login, name, role, bio, email, github_url, "[]", followers, now_iso_str),
+        (slug, login, name, role, bio, email, github_url, j(skills), followers, now_iso_str),
     )
     return {
         "id": f"gh_{login}",
@@ -12464,7 +12559,7 @@ def _build_employee(login, profile, company, slug, now_iso_str):
         "bio": bio,
         "github_url": github_url,
         "email": email,
-        "skills": [],
+        "skills": skills,
         "response_probability": min(90, 50 + followers // 20),
         "vouch_tier": "Tier 2",
         "reward": 10,
