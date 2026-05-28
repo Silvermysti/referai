@@ -39,10 +39,10 @@ export const authLogin = ({ email, password }) =>
     body: JSON.stringify({ email, password }),
   });
 
-export const parseJob = (jobUrl) =>
+export const parseJob = (jobDescription) =>
   request("/api/parse-job", {
     method: "POST",
-    body: JSON.stringify({ job_url: jobUrl }),
+    body: JSON.stringify({ job_description: jobDescription }),
   });
 
 export const getMatches = ({ jobId, job, userId }) =>

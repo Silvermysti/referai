@@ -1,7 +1,30 @@
 import { useRef, useState } from "react";
+import AutocompleteInput from "../components/AutocompleteInput";
 import ExtractionPreview from "../components/ExtractionPreview";
 import TagInput from "../components/TagInput";
+import { BRANCHES, COLLEGES, COMPANIES, DEGREES, INTERESTS, ROLES, SKILLS } from "../data/suggestions";
 import { updateProfile, uploadResume } from "../services/api";
+
+const GRAD_YEARS = Array.from({ length: 51 }, (_, i) => new Date().getFullYear() + 5 - i);
+
+const EMPTY_EDU = { college: "", degree: "", branch: "", graduation_year: "" };
+const EMPTY_EXP = { company: "", role: "", duration: "", description: "" };
+
+const eduKey = (e) =>
+  `${(e.college || "").toLowerCase().trim()}|${(e.degree || "").toLowerCase().trim()}`;
+
+const expKey = (e) =>
+  `${(e.company || "").toLowerCase().trim()}|${(e.role || "").toLowerCase().trim()}`;
+
+const mergeEducation = (existing, incoming) => {
+  const keys = new Set(existing.map(eduKey));
+  return [...existing, ...incoming.filter((e) => !keys.has(eduKey(e)))];
+};
+
+const mergeExperience = (existing, incoming) => {
+  const keys = new Set(existing.map(expKey));
+  return [...existing, ...incoming.filter((e) => !keys.has(expKey(e)))];
+};
 
 const Profile = ({ user, onUserUpdate }) => {
   const [skills, setSkills] = useState(user?.skills || []);
@@ -9,6 +32,8 @@ const Profile = ({ user, onUserUpdate }) => {
   const [targetCompanies, setTargetCompanies] = useState(user?.target_companies || []);
   const [currentRole, setCurrentRole] = useState(user?.current_role || "");
   const [targetRole, setTargetRole] = useState(user?.target_role || "");
+  const [education, setEducation] = useState(user?.education || []);
+  const [experience, setExperience] = useState(user?.experience || []);
 
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
@@ -37,13 +62,26 @@ const Profile = ({ user, onUserUpdate }) => {
 
   const handleConfirmExtraction = async (confirmed) => {
     setExtraction(null);
-    // Merge confirmed data into local state immediately for visual feedback
-    const newSkills = [...new Set([...skills, ...confirmed.skills].map((s) => s.toLowerCase()))].map(
-      (s) => confirmed.skills.find((cs) => cs.toLowerCase() === s) || skills.find((es) => es.toLowerCase() === s) || s
+    const confirmedSkills = confirmed.skills || [];
+    const confirmedInterests = confirmed.interests || [];
+    const confirmedEducation = confirmed.education || [];
+    const confirmedExperience = confirmed.experience || [];
+
+    // Merge confirmed data into local state — capture merged values as variables
+    // so the API call below uses the same values (avoids stale-state race).
+    const newSkills = [...new Set([...skills, ...confirmedSkills].map((s) => s.toLowerCase()))].map(
+      (s) => confirmedSkills.find((cs) => cs.toLowerCase() === s) || skills.find((es) => es.toLowerCase() === s) || s
     );
+    const newInterests = [...new Set([...interests, ...confirmedInterests])];
+    const newCurrentRole = confirmed.current_role || currentRole;
+    const mergedEdu = mergeEducation(education, confirmedEducation);
+    const mergedExp = mergeExperience(experience, confirmedExperience);
+
     setSkills(newSkills);
-    setInterests((prev) => [...new Set([...prev, ...confirmed.interests])]);
-    if (confirmed.current_role && !currentRole) setCurrentRole(confirmed.current_role);
+    setInterests(newInterests);
+    if (confirmed.current_role && !currentRole) setCurrentRole(newCurrentRole);
+    setEducation(mergedEdu);
+    setExperience(mergedExp);
 
     // Save to backend
     setSaving(true);
@@ -52,13 +90,13 @@ const Profile = ({ user, onUserUpdate }) => {
       const result = await updateProfile({
         userId: user.id,
         skills: newSkills,
-        education: confirmed.education,
-        experience: confirmed.experience,
-        interests: [...new Set([...interests, ...confirmed.interests])],
+        education: mergedEdu,
+        experience: mergedExp,
+        interests: newInterests,
         targetCompanies,
-        currentRole: confirmed.current_role || currentRole,
+        currentRole: newCurrentRole,
         targetRole,
-        summary: confirmed.summary,
+        summary: confirmed.summary || "",
       });
       onUserUpdate(result.user);
       setSaveSuccess(true);
@@ -78,12 +116,13 @@ const Profile = ({ user, onUserUpdate }) => {
       const result = await updateProfile({
         userId: user.id,
         skills,
-        education: user.education || [],
-        experience: user.experience || [],
+        education,
+        experience,
         interests,
         targetCompanies,
         currentRole,
         targetRole,
+        summary: user?.summary || "",
       });
       onUserUpdate(result.user);
       setSaveSuccess(true);
@@ -142,6 +181,7 @@ const Profile = ({ user, onUserUpdate }) => {
           tags={skills}
           onChange={setSkills}
           placeholder="e.g. Python, React, PostgreSQL"
+          suggestions={SKILLS}
         />
       </section>
 
@@ -153,6 +193,7 @@ const Profile = ({ user, onUserUpdate }) => {
           tags={interests}
           onChange={setInterests}
           placeholder="e.g. machine learning, fintech, open source"
+          suggestions={INTERESTS}
         />
       </section>
 
@@ -164,6 +205,7 @@ const Profile = ({ user, onUserUpdate }) => {
           tags={targetCompanies}
           onChange={setTargetCompanies}
           placeholder="e.g. Google, Stripe, Flipkart"
+          suggestions={COMPANIES}
         />
       </section>
 
@@ -173,44 +215,161 @@ const Profile = ({ user, onUserUpdate }) => {
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="block">
             <span className="mb-2 block text-sm font-bold text-main">Current role</span>
-            <input
-              className="field"
+            <AutocompleteInput
               value={currentRole}
-              onChange={(e) => setCurrentRole(e.target.value)}
+              onChange={setCurrentRole}
+              suggestions={ROLES}
               placeholder="e.g. SWE Intern at Flipkart"
             />
           </label>
           <label className="block">
             <span className="mb-2 block text-sm font-bold text-main">Target role</span>
-            <input
-              className="field"
+            <AutocompleteInput
               value={targetRole}
-              onChange={(e) => setTargetRole(e.target.value)}
+              onChange={setTargetRole}
+              suggestions={ROLES}
               placeholder="e.g. Backend Engineer"
             />
           </label>
         </div>
       </section>
 
-      {/* Education & Experience — read-only view, edit via resume upload */}
-      {(user?.education?.length > 0 || user?.experience?.length > 0) && (
-        <section className="surface-flat mb-6 p-6">
-          <p className="mb-4 text-sm font-black uppercase tracking-wide text-muted">Education & Experience</p>
-          <p className="mb-4 text-xs text-muted">Added from resume uploads. Upload a new resume to add more.</p>
-          {user.education?.map((edu, i) => (
-            <div key={i} className="mb-2 rounded-lg border border-app p-3">
-              <p className="text-sm font-black text-main">{edu.college}</p>
-              <p className="text-xs text-muted">{[edu.degree, edu.branch, edu.graduation_year].filter(Boolean).join(" · ")}</p>
+      {/* Education */}
+      <section className="surface-flat mb-6 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-sm font-black uppercase tracking-wide text-muted">Education</p>
+          <button
+            type="button"
+            onClick={() => setEducation((prev) => [...prev, { ...EMPTY_EDU }])}
+            className="text-xs font-bold text-accent hover:underline"
+          >
+            + Add
+          </button>
+        </div>
+        {education.length === 0 && (
+          <p className="text-sm text-muted">No education added yet. Upload a resume or click + Add.</p>
+        )}
+        {education.map((edu, i) => (
+          <div key={i} className="mb-3 rounded-lg border border-app p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">College / University</span>
+                <AutocompleteInput
+                  value={edu.college || ""}
+                  onChange={(v) => setEducation((prev) => prev.map((r, j) => j === i ? { ...r, college: v } : r))}
+                  suggestions={COLLEGES}
+                  placeholder="e.g. IIT Delhi"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">Degree</span>
+                <AutocompleteInput
+                  value={edu.degree || ""}
+                  onChange={(v) => setEducation((prev) => prev.map((r, j) => j === i ? { ...r, degree: v } : r))}
+                  suggestions={DEGREES}
+                  placeholder="e.g. B.Tech"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">Branch / Major</span>
+                <AutocompleteInput
+                  value={edu.branch || ""}
+                  onChange={(v) => setEducation((prev) => prev.map((r, j) => j === i ? { ...r, branch: v } : r))}
+                  suggestions={BRANCHES}
+                  placeholder="e.g. Computer Science"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">Graduation year</span>
+                <select
+                  className="field"
+                  value={edu.graduation_year || ""}
+                  onChange={(e) => setEducation((prev) => prev.map((r, j) => j === i ? { ...r, graduation_year: e.target.value ? parseInt(e.target.value) : "" } : r))}
+                >
+                  <option value="">Select year</option>
+                  {GRAD_YEARS.map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </label>
             </div>
-          ))}
-          {user.experience?.map((exp, i) => (
-            <div key={i} className="mb-2 rounded-lg border border-app p-3">
-              <p className="text-sm font-black text-main">{exp.role} at {exp.company}</p>
-              <p className="text-xs text-muted">{[exp.duration, exp.description].filter(Boolean).join(" · ").slice(0, 120)}</p>
+            <button
+              type="button"
+              onClick={() => setEducation((prev) => prev.filter((_, j) => j !== i))}
+              className="mt-3 text-xs font-bold text-rose-500 hover:underline"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </section>
+
+      {/* Experience */}
+      <section className="surface-flat mb-6 p-6">
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-sm font-black uppercase tracking-wide text-muted">Experience</p>
+          <button
+            type="button"
+            onClick={() => setExperience((prev) => [...prev, { ...EMPTY_EXP }])}
+            className="text-xs font-bold text-accent hover:underline"
+          >
+            + Add
+          </button>
+        </div>
+        {experience.length === 0 && (
+          <p className="text-sm text-muted">No experience added yet. Upload a resume or click + Add.</p>
+        )}
+        {experience.map((exp, i) => (
+          <div key={i} className="mb-3 rounded-lg border border-app p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">Company</span>
+                <AutocompleteInput
+                  value={exp.company || ""}
+                  onChange={(v) => setExperience((prev) => prev.map((r, j) => j === i ? { ...r, company: v } : r))}
+                  suggestions={COMPANIES}
+                  placeholder="e.g. Google"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">Role</span>
+                <AutocompleteInput
+                  value={exp.role || ""}
+                  onChange={(v) => setExperience((prev) => prev.map((r, j) => j === i ? { ...r, role: v } : r))}
+                  suggestions={ROLES}
+                  placeholder="e.g. Software Engineer"
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-bold text-muted">Duration</span>
+                <input
+                  className="field"
+                  value={exp.duration || ""}
+                  onChange={(e) => setExperience((prev) => prev.map((r, j) => j === i ? { ...r, duration: e.target.value } : r))}
+                  placeholder="e.g. Jun 2023 – Aug 2023"
+                />
+              </label>
+              <label className="block sm:col-span-2">
+                <span className="mb-1 block text-xs font-bold text-muted">Description</span>
+                <textarea
+                  className="field resize-none"
+                  rows={2}
+                  value={exp.description || ""}
+                  onChange={(e) => setExperience((prev) => prev.map((r, j) => j === i ? { ...r, description: e.target.value } : r))}
+                  placeholder="Brief description of your work"
+                />
+              </label>
             </div>
-          ))}
-        </section>
-      )}
+            <button
+              type="button"
+              onClick={() => setExperience((prev) => prev.filter((_, j) => j !== i))}
+              className="mt-3 text-xs font-bold text-rose-500 hover:underline"
+            >
+              Remove
+            </button>
+          </div>
+        ))}
+      </section>
 
       {error && <p className="mb-4 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm font-bold text-rose-700">{error}</p>}
       {saveSuccess && <p className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm font-bold text-emerald-700">Profile updated.</p>}

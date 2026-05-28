@@ -16,6 +16,11 @@ Install these before you start.
 | Git | any | `git --version` |
 | Ollama | any | `ollama --version` *(optional — only needed for AI coaching)* |
 
+You will also need:
+
+- A **DeepSeek API key** — free tier at [platform.deepseek.com](https://platform.deepseek.com)
+- A **GitHub Personal Access Token** — create one at [github.com/settings/tokens](https://github.com/settings/tokens) with `read:user` and `read:org` scopes
+
 ---
 
 ## Step 1 — Clone the repo
@@ -27,10 +32,30 @@ cd referai
 
 ---
 
-## Step 2 — Backend
+## Step 2 — Set up environment variables
 
 ```bash
 cd referai-backend
+cp .env.example .env
+```
+
+Open `.env` and fill in your keys:
+
+```
+DEEPSEEK_API_KEY=sk-...        # from platform.deepseek.com
+GITHUB_PAT=github_pat_...      # from github.com/settings/tokens
+```
+
+The Ollama variables are pre-filled with sensible defaults — leave them unless you changed Ollama's port or want a different model.
+
+> **The app works without these keys** but employee search and job parsing will only use the seed database (10 companies, 500 static profiles). With the keys, it searches GitHub live and supplements with AI-suggested profiles for any company.
+
+---
+
+## Step 3 — Backend
+
+```bash
+cd referai-backend   # (already here if you followed Step 2)
 
 # Create a virtual environment (one-time)
 python3 -m venv venv
@@ -59,7 +84,7 @@ The SQLite database (`referai.db`) is created automatically on first run and see
 
 ---
 
-## Step 3 — Frontend
+## Step 4 — Frontend
 
 Open a **new terminal** (do not close the backend one):
 
@@ -86,7 +111,7 @@ Open **http://localhost:5173** in your browser.
 
 ---
 
-## Step 4 — Log in
+## Step 5 — Log in
 
 Use any seed account:
 
@@ -100,13 +125,17 @@ All 15 seed users share the password `referai123`. Or click **Sign up** to creat
 
 ---
 
-## Step 5 — Try it out
+## Step 6 — Try it out
 
 1. Log in with a seed account
-2. Paste a job URL (any real job posting — e.g. from LinkedIn, Greenhouse, Lever, Workday)
+2. Paste a job description (raw text from LinkedIn, Greenhouse, Lever, Workday, or any job board)
 3. Click **Search**
-4. Browse the ranked employee list — each card shows match score, department, seniority, and skills
-5. Click an employee to see their full profile, an AI-generated outreach message, and the referral request button
+4. Browse the ranked employee list — each card shows match score, department, seniority, skills, and contact links (GitHub, LinkedIn, email where available)
+5. Look for the source badge above the results:
+   - 🔵 **Live from GitHub** — profiles fetched from the company's GitHub org in real time
+   - 🟣 **AI suggested** — profiles DeepSeek knows about from its training data
+   - 🟡 **From database** — static seed data (fallback when GitHub and AI return nothing)
+6. Click an employee to see their full profile, an AI-generated outreach message, and the referral request button
 
 ---
 
@@ -122,18 +151,17 @@ ollama serve                      # starts on http://127.0.0.1:11434
 
 Restart the Flask backend. It will detect Ollama automatically.
 
-To use a different model:
+To use a different model, update `OLLAMA_MODEL` in `referai-backend/.env`:
 
-```bash
-export OLLAMA_MODEL=mistral        # or any model you have pulled
-python app.py
+```
+OLLAMA_MODEL=mistral
 ```
 
 ---
 
 ## Optional: Point the frontend at a different backend
 
-If your backend runs on a different host or port, create a file at `referai-frontend/.env.local`:
+If your backend runs on a different host or port, create `referai-frontend/.env.local`:
 
 ```
 VITE_API_BASE_URL=http://192.168.1.X:5000
@@ -165,6 +193,8 @@ The database is recreated and re-seeded automatically on the next startup.
 | Browser shows CORS error | Confirm the Flask backend is running and `flask-cors` is installed (`pip install flask-cors`) |
 | Frontend shows "ReferAI service request failed" | Backend is not running or is on a different port — check the terminal running `python app.py` |
 | `npm install` fails | Ensure Node 18+ is installed; delete `node_modules/` and try again |
+| Employee search returns seed data only | `DEEPSEEK_API_KEY` or `GITHUB_PAT` not set in `.env` — add both for live results |
+| GitHub search returns no results | Token may be missing `read:org` scope — regenerate with `read:user` and `read:org` |
 | AI sections show "Offline fallback" | Ollama is not running — that is fine, everything else works |
 | Login returns 400 | Email field is empty or not a valid email address |
 | Login returns 401 | Wrong email or password — seed passwords are all `referai123` |
@@ -176,7 +206,8 @@ The database is recreated and re-seeded automatically on the next startup.
 ```
 referai-backend/
   app.py              ← entire backend: routes, DB, matching, seed data
-  requirements.txt    ← Flask, flask-cors
+  .env.example        ← copy to .env and fill in your API keys
+  requirements.txt    ← Flask, flask-cors, pdfplumber, python-docx
   referai.db          ← SQLite file (gitignored, auto-created)
 
 referai-frontend/
@@ -185,8 +216,10 @@ referai-frontend/
       Landing.jsx     ← marketing / logged-out homepage
       Auth.jsx        ← login + signup
       Student.jsx     ← main app: job search, employee matching, referral
+      Profile.jsx     ← resume upload + profile settings
     components/
-      common/         ← Layout, Sidebar, Header
+      TagInput.jsx
+      AutocompleteInput.jsx
     services/
       api.js          ← all API calls to the backend
   package.json

@@ -10810,9 +10810,16 @@ def employee_signal_text(emp):
     edu = " ".join(" ".join(filter(None, [e.get("college"), e.get("branch")])) for e in education)
     exp = " ".join(" ".join(filter(None, [e.get("role"), e.get("description")])) for e in experience)
     skills_safe = [s for s in skills if isinstance(s, str)]
+    bio = emp.get("bio", "")
+    role = emp.get("role", "")
+    # For GitHub employees (sparse profiles) repeat bio and role so TF-IDF
+    # has enough signal to compute a non-zero cosine similarity.
+    is_github = (emp.get("id") or "").startswith("gh_")
+    bio_part = (bio + " " + bio) if is_github and bio else bio
+    role_part = (role + " " + role) if is_github and role else role
     return " ".join(filter(None, [
-        emp.get("name", ""), emp.get("role", ""), emp.get("department", ""),
-        " ".join(skills_safe), emp.get("bio", ""), edu, exp,
+        emp.get("name", ""), role_part, emp.get("department", ""),
+        " ".join(skills_safe), bio_part, edu, exp,
     ]))
 
 
@@ -10903,21 +10910,6 @@ def extract_with_deepseek(resume_text):
         return None
 
 
-def extract_with_gemini(resume_text):
-    if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
-        return None
-    payload = json.dumps({
-        "contents": [{"parts": [{"text": _EXTRACT_PROMPT + resume_text[:8000]}]}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 1024},
-    }).encode()
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read())
-        return _parse_llm_json(data["candidates"][0]["content"]["parts"][0]["text"])
-    except Exception:
-        return None
 
 
 def extract_resume_regex_fallback(text):
@@ -10948,6 +10940,131 @@ def extract_resume_regex_fallback(text):
 
 
 
+
+
+_EXTRACT_JOB_PROMPT = """You are a job posting parser. Extract structured information from the job description below.
+Return ONLY a valid JSON object — no markdown, no extra text — with exactly this shape:
+{
+  "role": "Job title",
+  "company": "Company name (legal entity or brand, exactly as written)",
+  "subsidiary": "Specific brand / product / sub-company if different from company (e.g. 'Ring' for an Amazon posting, 'Instagram' for Meta) — empty string if same as company",
+  "team": "Team or department name if mentioned (e.g. 'Video Streaming Quality', 'Platform Engineering') — empty string if not mentioned",
+  "location": "City / Remote / Hybrid / Not listed",
+  "location_city": "City name only, no country (e.g. 'Madrid', 'Bangalore', 'San Francisco') — empty string if not mentioned",
+  "level": "Internship / New Grad / Mid-level / Senior / Not specified",
+  "skills": ["skill1", "skill2", "skill3"],
+  "tech_stack": ["tool1", "tool2"],
+  "description": "One paragraph summary of what the role involves"
+}
+Rules:
+- skills: technical skills, tools, languages, frameworks required — keep them short (1–4 words each), 4–10 items
+- tech_stack: specific tools, platforms, codecs, frameworks mentioned in the team/company description (not just requirements) — 0–6 items, empty array if none
+- level: pick the closest match from the list above
+- company: exact company name as written in the posting, or empty string if not found
+- subsidiary: only fill if the posting clearly names a specific brand/sub-team different from the parent company
+- team: the team name as stated, e.g. "The Video Streaming Quality (VQ) team" → "Video Streaming Quality"
+- location_city: city where the office is, extracted from phrases like "Madrid Tech Hub", "Bangalore office", "New York HQ"
+- If a field is unclear, use an empty string or empty array — do not guess
+
+Job description:
+"""
+
+
+
+
+def extract_job_with_deepseek(job_text):
+    """Extract structured job info from raw description text using DeepSeek."""
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "your_deepseek_api_key_here":
+        return None
+    payload = json.dumps({
+        "model": DEEPSEEK_MODEL,
+        "messages": [{"role": "user", "content": _EXTRACT_JOB_PROMPT + job_text[:8000]}],
+        "temperature": 0.1,
+        "max_tokens": 512,
+    }).encode()
+    req = Request(
+        f"{DEEPSEEK_BASE_URL}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+    )
+    try:
+        with urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read())
+        return _parse_llm_json(data["choices"][0]["message"]["content"])
+    except Exception:
+        return None
+
+
+def extract_job_regex_fallback(text):
+    """Best-effort regex keyword extraction from job description text."""
+    skill_keywords = re.findall(
+        r"\b(Python|Java|JavaScript|TypeScript|Go|Rust|C\+\+|React|Node\.js|"
+        r"FastAPI|Django|Flask|PostgreSQL|MySQL|Redis|Docker|Kubernetes|AWS|"
+        r"GCP|Azure|TensorFlow|PyTorch|SQL|Git|Linux|Bash|REST|GraphQL|"
+        r"Kafka|Spark|Scala|Ruby|Swift|Kotlin|Flutter|React\s*Native|"
+        r"Machine\s*Learning|Deep\s*Learning|NLP|CI/CD|Terraform|Ansible)\b",
+        text, re.IGNORECASE,
+    )
+    skills = list(dict.fromkeys(s.strip() for s in skill_keywords))
+
+    # Try to extract company — multiple patterns in priority order
+    company = ""
+    # Pattern 1: "Company - XYZ" or "Company: XYZ" at end of text (LinkedIn/Amazon format)
+    m = re.search(r"Company\s*[-:]\s*([A-Za-z][A-Za-z0-9&., ]{1,60}?)(?:\s*\n|$)", text, re.IGNORECASE)
+    if m:
+        company = m.group(1).strip().rstrip(".,")
+    # Pattern 2: "at Company" pattern in body text
+    if not company:
+        m = re.search(r"(?:^|\s)at\s+([A-Z][A-Za-z0-9& ]{1,30}?)(?:\s*[,.|]|\s+is\s|\s+we\b)", text)
+        if m:
+            company = m.group(1).strip()
+    # Pattern 3: "About The Team … at Company"
+    if not company:
+        m = re.search(r"team\s+at\s+([A-Z][A-Za-z0-9& ]{1,30}?)(?:\s*[,.\n])", text)
+        if m:
+            company = m.group(1).strip()
+
+    # Try to find role from first non-empty line or a heading pattern
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    role = lines[0][:80] if lines else ""
+    # Skip boilerplate first lines like "About the job" / "Description"
+    for line in lines:
+        if len(line) > 10 and line.lower() not in ("about the job", "description", "job description"):
+            role = line[:80]
+            break
+
+    # Extract subsidiary brand (e.g. "Ring" in Amazon job, "Instagram" in Meta job)
+    subsidiary = ""
+    m = re.search(r"(?:team\s+at|group\s+at|division\s+at)\s+([A-Z][A-Za-z0-9& ]{1,25}?)(?:\s+focuses|\s+is|\s*[,.\n])", text)
+    if m:
+        brand = m.group(1).strip()
+        if brand.lower() != company.lower():
+            subsidiary = brand
+
+    # Extract team name: "The XYZ team at …" or "About The Team … XYZ team"
+    team = ""
+    m = re.search(r"[Tt]he\s+([A-Z][A-Za-z0-9 ()&]{3,40}?)\s+(?:team|group|org)\b", text)
+    if m:
+        team = m.group(1).strip()
+
+    # Extract city from "Madrid Tech Hub", "Bangalore office", "New York HQ"
+    location_city = ""
+    m = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s+(?:Tech\s+Hub|Office|HQ|Headquarters|Campus)\b", text)
+    if m:
+        location_city = m.group(1).strip()
+
+    return {
+        "role": role,
+        "company": company,
+        "subsidiary": subsidiary,
+        "team": team,
+        "location": "Not listed",
+        "location_city": location_city,
+        "level": "Not specified",
+        "skills": skills[:10],
+        "tech_stack": [],
+        "description": " ".join(lines[:3])[:300],
+    }
 
 
 def _deserialize_employee(row):
@@ -11030,8 +11147,12 @@ DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 DEEPSEEK_MODEL = "deepseek-chat"
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
+GITHUB_API = "https://api.github.com"
+
+# Web search — Google Custom Search API (free 100 queries/day)
+# Create CSE: https://programmablesearchengine.google.com/
+# Get API key: https://console.cloud.google.com/apis/credentials
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
@@ -11984,6 +12105,31 @@ def find_user(user_id):
 
 
 def find_employee(employee_id):
+    if not employee_id:
+        return None
+    # GitHub employees are stored in the cache table, not in employees
+    if employee_id.startswith("gh_"):
+        login = employee_id[3:]
+        row = db_query_one("SELECT * FROM github_employees_cache WHERE login=?", (login,))
+        if row:
+            return {
+                "id": employee_id,
+                "name": row["name"] or login,
+                "company": row.get("company_slug", ""),
+                "role": row["role"] or "Software Engineer",
+                "department": "Engineering",
+                "seniority": "Unknown",
+                "bio": (row["bio"] or "").replace("\r\n", " ").strip(),
+                "github_url": row["github_url"] or f"https://github.com/{login}",
+                "email": row["email"] or "",
+                "skills": jl(row["skills"]),
+                "response_probability": min(90, 50 + (row["followers"] or 0) // 20),
+                "vouch_tier": "Tier 2",
+                "reward": 10,
+                "education": [],
+                "experience": [],
+            }
+        return None
     row = db_query_one("SELECT * FROM employees WHERE id=?", (employee_id,))
     return _deserialize_employee(row) if row else None
 
@@ -12057,12 +12203,9 @@ def filter_profiles(profiles, search="", skill="", role=""):
 
 def find_job(job_id):
     if not job_id:
-        row = db_query_one("SELECT * FROM jobs WHERE is_live_extract=0 ORDER BY rowid LIMIT 1")
-    else:
-        row = db_query_one("SELECT * FROM jobs WHERE id=?", (job_id,))
-        if not row:
-            row = db_query_one("SELECT * FROM jobs WHERE is_live_extract=0 ORDER BY rowid LIMIT 1")
-    return _deserialize_job(row)
+        return None
+    row = db_query_one("SELECT * FROM jobs WHERE id=?", (job_id,))
+    return _deserialize_job(row) if row else None
 
 
 
@@ -12271,16 +12414,775 @@ def connections():
 
 
 
+def _gh_request(path):
+    """Make an authenticated GitHub API request. Returns parsed JSON or None on error."""
+    if not GITHUB_PAT:
+        return None
+    url = path if path.startswith("http") else f"{GITHUB_API}{path}"
+    req = Request(url, headers={
+        "Authorization": f"Bearer {GITHUB_PAT}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "User-Agent": "ReferAI/1.0",
+    })
+    try:
+        with urlopen(req, timeout=10) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Company → GitHub org resolution
+# ---------------------------------------------------------------------------
+
+# Step 1: Strip legal-entity suffixes before any lookup.
+# Handles: Inc., LLC, Ltd., GmbH, S.L.U., S.A., B.V., Pte. Ltd., etc.
+_LEGAL_SUFFIX_RE = re.compile(
+    r"[\s,]+(inc\.?|llc\.?|l\.l\.c\.?|ltd\.?|limited|corp\.?|corporation|"
+    r"co\.?|gmbh|ag|sa\.?|s\.l\.u?\.?|s\.a\.u?\.?|s\.l\.p?\.?|b\.v\.?|"
+    r"plc\.?|pty\.?\s*ltd\.?|pte\.?\s*ltd\.?|s\.r\.l\.?|s\.p\.a\.?|"
+    r"n\.v\.?|a\.s\.?|a\/s|aps|oü|ab|oy|as\.?)+\s*$",
+    re.IGNORECASE,
+)
+
+# Step 2: Subsidiary → canonical parent slug.
+# Handles subsidiaries/brands that have a different name from their GitHub org.
+_SUBSIDIARY_TO_ORG = {
+    # Amazon subsidiaries
+    "ring":             "ring-doorbell",
+    "wholefoodsmarket": "amzn",
+    "zappos":           "amzn",
+    "audible":          "amzn",
+    "twitch":           "twitchtv",
+    "imdb":             "amzn",
+    # Google / Alphabet subsidiaries
+    "deepmind":         "google-deepmind",
+    "googledeepmind":   "google-deepmind",
+    "waymo":            "waymo-research",
+    "verily":           "google",
+    "calico":           "google",
+    "youtube":          "google",
+    # Meta / Facebook subsidiaries
+    "instagram":        "facebook",
+    "whatsapp":         "facebook",
+    "oculus":           "facebook",
+    "oculusvr":         "facebook",
+    # Microsoft subsidiaries
+    "github":           "github",
+    "linkedin":         "linkedin",
+    "skype":            "microsoft",
+    "mojang":           "microsoft",
+    "nuance":           "microsoft",
+    # Salesforce subsidiaries
+    "slack":            "slackhq",
+    "tableau":          "tableau",
+    "mulesoft":         "mulesoft",
+    "heroku":           "heroku",
+    # Apple subsidiaries
+    "beats":            "apple",
+    "shazam":           "apple",
+    # Google → Fitbit
+    "fitbit":           "google",
+    # Other notable ones
+    "instagram":        "facebook",
+}
+
+# Step 3: Canonical company name (slug form) → GitHub org.
+# Used when the cleaned slug doesn't directly match the GitHub org name.
+_COMPANY_ORG_MAP = {
+    # Big Tech
+    "amazon":               "amzn",
+    "amazonwebservices":    "aws",
+    "aws":                  "aws",
+    "google":               "google",
+    "alphabet":             "google",
+    "meta":                 "facebook",
+    "facebook":             "facebook",
+    "microsoft":            "microsoft",
+    "apple":                "apple",
+    "netflix":              "netflix",
+    "nvidia":               "nvidia",
+    "intel":                "intel",
+    "qualcomm":             "qualcomm",
+    "ibm":                  "ibm",
+    "oracle":               "oracle",
+    "adobe":                "adobe",
+    "salesforce":           "salesforce",
+    "vmware":               "vmware",
+    "redhat":               "redhatofficial",
+    "canonical":            "canonical",
+    "cisco":                "CiscoDevNet",
+    # Cloud / Infra
+    "digitalocean":         "digitalocean",
+    "cloudflare":           "cloudflare",
+    "hashicorp":            "hashicorp",
+    "databricks":           "databricks",
+    "mongodb":              "mongodb",
+    "elastic":              "elastic",
+    "grafana":              "grafana",
+    "confluent":            "confluentinc",
+    "vercel":               "vercel",
+    "netlify":              "netlify",
+    "supabase":             "supabase",
+    "planetscale":          "planetscale",
+    "neon":                 "neondatabase",
+    # Developer tools / SaaS
+    "github":               "github",
+    "gitlab":               "gitlab",
+    "atlassian":            "atlassian",
+    "jira":                 "atlassian",
+    "bitbucket":            "atlassian",
+    "datadog":              "datadog",
+    "newrelic":             "newrelic",
+    "pagerduty":            "pagerduty",
+    "okta":                 "okta",
+    "twilio":               "twilio",
+    "sendgrid":             "sendgrid",
+    "zendesk":              "zendesk",
+    "intercom":             "intercom",
+    "hubspot":              "hubspot",
+    "stripe":               "stripe",
+    "braintree":            "braintree",
+    "paypal":               "paypal",
+    "square":               "square",
+    "shopify":              "shopify",
+    "dropbox":              "dropbox",
+    "box":                  "box",
+    "notion":               "makenotion",
+    "figma":                "figma",
+    # Social / Media
+    "twitter":              "twitter",
+    "x":                    "twitter",
+    "xcorp":                "twitter",
+    "spotify":              "spotify",
+    "snap":                 "snap",
+    "snapchat":             "snap",
+    "pinterest":            "pinterest",
+    "reddit":               "reddit",
+    "discord":              "discord",
+    "slack":                "slackhq",
+    # Ride / Delivery
+    "uber":                 "uber",
+    "lyft":                 "lyft",
+    "doordash":             "doordash",
+    "instacart":            "instacart",
+    "gopuff":               "gopuff",
+    # Indian tech companies
+    "flipkart":             "flipkart",
+    "swiggy":               "swiggy",
+    "zomato":               "zomato",
+    "paytm":                "paytmtech",
+    "razorpay":             "razorpay",
+    "freshworks":           "freshworks",
+    "zoho":                 "zohocrm",
+    "infosys":              "infosys",
+    "wipro":                "wipro",
+    "ola":                  "ola-electric",
+    "dream11":              "dream11",
+    "groww":                "groww",
+    "phonepe":              "phonepe",
+    "cred":                 "cred-club",
+    "meesho":               "meesho",
+    "zepto":                "zeptoteam",
+    # Finance
+    "robinhood":            "robinhood",
+    "plaid":                "plaid",
+    "chime":                "chime",
+    "brex":                 "brexhq",
+    "nubank":               "nubank",
+    "revolut":              "revolut",
+    "wise":                 "transferwise",
+    "transferwise":         "transferwise",
+    # Other notable
+    "airbnb":               "airbnb",
+    "coinbase":             "coinbase",
+    "openai":               "openai",
+    "anthropic":            "anthropics",
+    "deepseek":             "deepseek-ai",
+    "mistral":              "mistralai",
+    "huggingface":          "huggingface",
+    "palantir":             "palantir",
+    "snowflake":            "snowflakedb",
+    "dbt":                  "dbt-labs",
+    "airbyte":              "airbytehq",
+    "fivetran":             "fivetran",
+    "stitch":               "stitchdata",
+}
+
+# Secondary orgs — for companies with multiple meaningful GitHub orgs.
+# The primary org (from _COMPANY_ORG_MAP) is searched first; these supplement.
+_COMPANY_EXTRA_ORGS = {
+    "amzn":         ["aws", "ring-doorbell", "twitchtv", "alexa"],
+    "google":       ["googlecloudplatform", "googlechrome", "google-deepmind"],
+    "microsoft":    ["azure", "dotnet", "aspnet", "github", "linkedin"],
+    "facebook":     ["facebookresearch", "facebookincubator", "pytorch"],
+    "apple":        ["apple"],
+    "netflix":      ["netflixoss"],
+    "atlassian":    ["atlassian-labs"],
+    "hashicorp":    ["hashicorp-education"],
+    "salesforce":   ["forcedotcom", "slackhq", "heroku"],
+}
+
+
+def _github_company_slug(company):
+    """Normalise any company name (including legal entities) to a GitHub org slug.
+
+    Resolution order:
+      1. Strip legal-entity suffixes (Inc., S.L.U., GmbH, etc.)
+      2. Check subsidiary map  (Ring → ring-doorbell, Instagram → facebook)
+      3. Check canonical company → org map  (Amazon → amzn, Google → google)
+      4. Return cleaned slug as-is (works for most startups / smaller companies)
+    """
+    if not company:
+        return ""
+
+    # Strip trailing legal suffixes iteratively (e.g. "Inc., Ltd" needs two passes)
+    name = company.strip()
+    for _ in range(3):
+        cleaned = _LEGAL_SUFFIX_RE.sub("", name)
+        if cleaned == name:
+            break
+        name = cleaned
+
+    slug = re.sub(r"[^a-z0-9]+", "", name.lower())
+
+    # Subsidiary check first (Ring, Instagram, YouTube, etc.)
+    if slug in _SUBSIDIARY_TO_ORG:
+        return _SUBSIDIARY_TO_ORG[slug]
+
+    # Canonical company map (handles Amazon → amzn, Google → google, etc.)
+    if slug in _COMPANY_ORG_MAP:
+        return _COMPANY_ORG_MAP[slug]
+
+    # Prefix/substring match — handles "AmazonSpainServices" → amazon → amzn.
+    # Only run if the exact slug wasn't found above.
+    for key, org in _COMPANY_ORG_MAP.items():
+        if len(key) >= 4 and slug.startswith(key):
+            return org
+
+    return slug
+
+
+_KNOWN_ROLE_TITLES = [
+    "engineering manager", "staff software engineer", "principal engineer",
+    "senior software engineer", "senior engineer", "software engineer",
+    "frontend engineer", "backend engineer", "full stack engineer",
+    "fullstack engineer", "data engineer", "ml engineer",
+    "machine learning engineer", "devops engineer",
+    "site reliability engineer", "sre", "platform engineer",
+    "infrastructure engineer", "security engineer", "mobile engineer",
+    "ios engineer", "android engineer", "product manager",
+    "developer advocate", "solutions engineer", "solution architect",
+    "solutions architect", "developer productivity", "developer experience",
+    "marketing", "business development", "designer", "ux designer",
+    "intern", "software development engineer",
+]
+
+# Bio patterns that are NOT roles — redirect/personal note noise
+_BIO_NOISE_PREFIXES = (
+    "personal account", "my personal", "this is", "base account",
+    "opinions", "tinkerer", "that's", "the ", "just a ",
+)
+
+
+def _github_infer_role(bio):
+    """Extract a meaningful job title from a GitHub bio.
+
+    Returns 'Software Engineer' if the bio doesn't contain a recognisable title
+    (avoids noise like 'Personal account: @foo' or 'The Stripe version of @x').
+    """
+    if not bio:
+        return "Software Engineer"
+    # Normalise: strip carriage returns, collapse whitespace
+    bio_clean = re.sub(r"\s+", " ", bio.replace("\r\n", " ").replace("\r", " ")).strip()
+    b = bio_clean.lower()
+
+    # Skip bios that are clearly redirect/personal notes
+    if any(b.startswith(prefix) for prefix in _BIO_NOISE_PREFIXES):
+        return "Software Engineer"
+
+    # Check for known title substrings
+    for title in _KNOWN_ROLE_TITLES:
+        if title in b:
+            return title.title()
+
+    # Try the first segment (before . | @ \n) and accept only if it contains a job keyword
+    first = re.split(r"[.|@\n]", bio_clean)[0].strip()
+    job_words = {"engineer", "developer", "manager", "designer", "analyst",
+                 "scientist", "consultant", "architect", "lead", "head",
+                 "director", "intern", "researcher", "advocate", "librarian",
+                 "productivity", "reliability", "platform", "security"}
+    if any(w in first.lower() for w in job_words):
+        return first[:60]
+
+    return "Software Engineer"
+
+
+_TECH_SKILL_PATTERN = re.compile(
+    r"\b(Python|Go|Golang|Rust|Java|JavaScript|TypeScript|Ruby|Swift|Kotlin|"
+    r"Scala|C\+\+|React|Vue|Angular|Node\.js|Django|FastAPI|Flask|Spring|Rails|"
+    r"PostgreSQL|MySQL|SQLite|Redis|Kafka|Elasticsearch|MongoDB|"
+    r"Docker|Kubernetes|Terraform|AWS|GCP|Azure|Linux|Bash|"
+    r"TensorFlow|PyTorch|machine learning|deep learning|NLP|"
+    r"GraphQL|REST|gRPC|WebAssembly|WASM|Distributed Systems|"
+    r"Canva|PowerPoint|HubSpot|Salesforce|Figma|Sketch|Notion)\b",
+    re.IGNORECASE,
+)
+
+
+def _extract_skills_from_text(text):
+    """Pull recognised tech/tool keywords out of any free-form text string."""
+    if not text:
+        return []
+    found = _TECH_SKILL_PATTERN.findall(text)
+    seen, skills = set(), []
+    for s in found:
+        norm = s.lower()
+        if norm not in seen:
+            seen.add(norm)
+            skills.append(s)
+    return skills
+
+
+def _job_search_keywords(job_signal, max_keywords=3):
+    """
+    Extract the most useful search keywords from a job signal string.
+    Picks short, common tech/domain words — avoids stop words and long phrases.
+    Used to narrow down GitHub user search results.
+    """
+    stop = {"and", "the", "for", "with", "you", "will", "our", "are",
+            "this", "that", "have", "from", "your", "work", "join",
+            "team", "role", "experience", "looking", "strong", "build",
+            "not", "all", "can", "new", "one", "use", "any"}
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9#+\-.]{1,20}", job_signal)
+    seen = set()
+    keywords = []
+    for w in words:
+        lw = w.lower()
+        if lw not in stop and lw not in seen and len(lw) > 2:
+            seen.add(lw)
+            keywords.append(w)
+        if len(keywords) >= max_keywords:
+            break
+    return keywords
+
+
+# ---------------------------------------------------------------------------
+# Web-search snippet employee discovery
+# ---------------------------------------------------------------------------
+
+_PROFILE_SEARCH_PROMPT = """List {n} {role_type} at {target}{location}{skills}.
+Return ONLY JSON array:
+[{{"name":"Full Name","role":"Job Title","linkedin_url":"https://linkedin.com/in/slug or empty","skills":["skill"]}}]
+No text outside JSON. Empty linkedin_url if unsure."""
+
+
+def _derive_professional_type(role: str) -> str:
+    """Map a job role string to a natural-language professional type for the search prompt."""
+    r = role.lower()
+    if any(k in r for k in ("engineer", "developer", "devops", "sre", "backend", "frontend",
+                             "fullstack", "full stack", "mobile", "ios", "android", "ml ",
+                             "machine learning", "data scientist", "security")):
+        return "software engineers"
+    if any(k in r for k in ("product manager", " pm ", "product lead")):
+        return "product managers"
+    if any(k in r for k in ("marketplace", "e-commerce", "ecommerce", "seller", "vendor",
+                             "flipkart", "amazon seller", "listing")):
+        return "e-commerce professionals"
+    if any(k in r for k in ("data analyst", "analytics", "business analyst", "bi ")):
+        return "data analysts"
+    if any(k in r for k in ("marketing", "growth", "brand", "content", "seo", "performance")):
+        return "marketing professionals"
+    if any(k in r for k in ("design", "ux", "ui ", "user experience")):
+        return "designers"
+    if any(k in r for k in ("sales", "account exec", "account manager", "account lead",
+                             "business development", "bd ")):
+        return "sales professionals"
+    if any(k in r for k in ("operations", "supply chain", "logistics", "fulfilment", "fulfillment")):
+        return "operations professionals"
+    # Generic fallback — still produces real names rather than an empty list
+    return "professionals"
+
+
+def fetch_search_snippet_employees(company, job_signal="", subsidiary="", tech_stack=None,
+                                   location_city="", max_results=15, role=""):
+    """Find employees using DeepSeek's training knowledge of public profiles."""
+    if not DEEPSEEK_API_KEY or DEEPSEEK_API_KEY == "your_deepseek_api_key_here":
+        return []
+
+    tech_stack = tech_stack or []
+    target = subsidiary or company
+
+    # Build compact context filters
+    kws = _job_search_keywords(job_signal, max_keywords=3) if job_signal else []
+    ts  = [t for t in tech_stack if len(t) >= 4][:3]
+    skill_hints = list(dict.fromkeys(kws + ts))[:4]
+
+    skills_str    = f" skilled in {', '.join(skill_hints)}" if skill_hints else ""
+    location_str  = f" in {location_city}" if location_city else ""
+    role_type     = _derive_professional_type(role or job_signal)
+
+    prompt = _PROFILE_SEARCH_PROMPT.format(
+        n=max_results, target=target, role_type=role_type,
+        location=location_str, skills=skills_str,
+    )
+
+    payload = json.dumps({
+        "model":       DEEPSEEK_MODEL,
+        "messages":    [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_tokens":  600,
+    }).encode()
+    req = Request(
+        f"{DEEPSEEK_BASE_URL}/chat/completions",
+        data=payload,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {DEEPSEEK_API_KEY}"},
+    )
+    try:
+        with urlopen(req, timeout=30) as r:
+            data = json.loads(r.read())
+        raw = data["choices"][0]["message"]["content"]
+        profiles = _parse_llm_json(raw)
+        if not isinstance(profiles, list):
+            return []
+    except Exception:
+        return []
+
+    employees = []
+    seen = set()
+    for p in profiles:
+        name = (p.get("name") or "").strip()
+        if not name or len(name) < 3 or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+
+        # Validate LinkedIn URL — only keep if it genuinely looks like a profile slug
+        raw_url = (p.get("linkedin_url") or "").strip()
+        linkedin_url = ""
+        if re.match(r"https?://(www\.)?linkedin\.com/in/[\w\-]+/?$", raw_url):
+            linkedin_url = raw_url
+
+        skills = [s for s in (p.get("skills") or []) if isinstance(s, str)]
+
+        employees.append({
+            "id":                   f"ds_{uuid4().hex[:10]}",
+            "name":                 name,
+            "company":              company,
+            "company_slug":         _github_company_slug(company),
+            "role":                 (p.get("role") or "Software Engineer").strip(),
+            "department":           "Engineering",
+            "seniority":            "Unknown",
+            "bio":                  "",
+            "linkedin_url":         linkedin_url,
+            "github_url":           "",
+            "email":                "",
+            "skills":               skills,
+            "response_probability": 45,
+            "vouch_tier":           "Tier 2",
+            "reward":               10,
+            "education":            [],
+            "experience":           [],
+            "_source_type":         "ai",
+        })
+
+    return employees
+
+
+def _extract_linkedin_from_blog(blog_field):
+    """Return a normalised LinkedIn profile URL if the blog field contains one."""
+    if not blog_field:
+        return ""
+    b = blog_field.strip()
+    if "linkedin.com/in/" in b.lower():
+        # Ensure it has a scheme
+        if not re.match(r"^https?://", b, re.IGNORECASE):
+            b = "https://" + b.lstrip("/")
+        return b
+    return ""
+
+
+def _build_employee(login, profile, company, slug, now_iso_str):
+    """Build a normalised employee dict from a GitHub profile response."""
+    name = profile.get("name") or login
+    # Normalise bio: strip carriage returns, collapse whitespace
+    raw_bio = profile.get("bio") or ""
+    bio = re.sub(r"\s+", " ", raw_bio.replace("\r\n", " ").replace("\r", " ")).strip()
+    email      = profile.get("email") or ""
+    followers  = profile.get("followers") or 0
+    github_url = profile.get("html_url") or f"https://github.com/{login}"
+    # Many engineers put their LinkedIn URL in the blog/website field
+    linkedin_url = _extract_linkedin_from_blog(profile.get("blog") or "")
+    role   = _github_infer_role(bio)
+    skills = _extract_skills_from_text(bio)
+
+    db_execute(
+        """INSERT OR REPLACE INTO github_employees_cache
+           (company_slug, login, name, role, bio, email, github_url, skills, followers, cached_at)
+           VALUES (?,?,?,?,?,?,?,?,?,?)""",
+        (slug, login, name, role, bio, email, github_url, j(skills), followers, now_iso_str),
+    )
+    return {
+        "id":                   f"gh_{login}",
+        "name":                 name,
+        "company":              company,
+        "company_slug":         slug,
+        "role":                 role,
+        "department":           "Engineering",
+        "seniority":            "Unknown",
+        "bio":                  bio,
+        "github_url":           github_url,
+        "linkedin_url":         linkedin_url,
+        "email":                email,
+        "skills":               skills,
+        "response_probability": min(90, 50 + followers // 20),
+        "vouch_tier":           "Tier 2",
+        "reward":               10,
+        "education":            [],
+        "experience":           [],
+        "_source_type":         "github",
+    }
+
+
+def fetch_github_employees(
+    company,
+    job_signal="",
+    max_results=20,
+    subsidiary="",
+    team="",
+    tech_stack=None,
+    location_city="",
+    role="",
+):
+    """
+    Primary employee source — always tried first before seed DB.
+
+    Search strategy (results are merged and deduped):
+      1. Subsidiary org members — if a subsidiary/brand was extracted
+         (e.g. 'Ring' → ring-doorbell org), search it directly first
+      2. Primary org members — /orgs/{slug}/members
+      3. Extra org members — subsidiary orgs from _COMPANY_EXTRA_ORGS
+      4. Company field search — type:user company:"{company}"
+      5. Keyword + org search — org:{slug} {job_keywords}
+      6. Tech-stack + location probe — org:{slug} {tech_stack_terms} location:{city}
+      7. Last resort fallback — global keyword search if nothing found
+
+    All results cached in SQLite for 24 h.
+    Cosine similarity ranking happens in /api/match after this returns.
+    """
+    if not GITHUB_PAT:
+        return []
+
+    tech_stack = tech_stack or []
+
+    slug = _github_company_slug(company)
+    now = datetime.now(timezone.utc)
+    now_str = now.isoformat()
+
+    # --- Serve from cache if fresh ---
+    cached = db_query(
+        "SELECT * FROM github_employees_cache "
+        "WHERE company_slug=? AND cached_at > datetime(?, '-24 hours')",
+        (slug, now_str),
+    )
+    if cached:
+        return [
+            {
+                "id": f"gh_{row['login']}",
+                "name": row["name"] or row["login"],
+                "company": company,
+                "company_slug": slug,
+                "role": row["role"] or "Software Engineer",
+                "department": "Engineering",
+                "seniority": "Unknown",
+                "bio": row["bio"] or "",
+                "github_url": row["github_url"] or f"https://github.com/{row['login']}",
+                "email": row["email"] or "",
+                "skills": jl(row["skills"]),
+                "response_probability": min(90, 50 + (row["followers"] or 0) // 20),
+                "vouch_tier": "Tier 2",
+                "reward": 10,
+                "education": [],
+                "experience": [],
+            }
+            for row in cached
+        ]
+
+    from urllib.parse import quote as _q
+
+    logins_seen = set()
+    all_logins = []
+
+    def _collect_org_members(org_slug, limit=30):
+        """Collect member logins from a GitHub org into all_logins."""
+        members = _gh_request(f"/orgs/{org_slug}/members?per_page={limit}")
+        if isinstance(members, list):
+            for m in members:
+                lg = m.get("login")
+                if lg and lg not in logins_seen:
+                    logins_seen.add(lg)
+                    all_logins.append(lg)
+
+    # 1. Subsidiary org first — if a sub-brand was extracted, search it directly.
+    #    e.g. Amazon job mentioning Ring → search ring-doorbell org for people
+    #    who work specifically on Ring, not just Amazon at large.
+    sub_slug = _github_company_slug(subsidiary) if subsidiary else ""
+    if sub_slug and sub_slug != slug:
+        _collect_org_members(sub_slug, limit=20)
+
+    # 2. Primary org members
+    _collect_org_members(slug, limit=30)
+
+    # 2b. Extra orgs for companies with multiple GitHub orgs
+    for extra_org in _COMPANY_EXTRA_ORGS.get(slug, []):
+        if sub_slug != extra_org and len(all_logins) < max_results:
+            _collect_org_members(extra_org, limit=15)
+
+    # 3. Company field search — finds employees who explicitly list the company.
+    #    Note: many large companies (Amazon, Google) employees rarely fill this,
+    #    so count can be 0. Still useful for mid-size companies.
+    q_company = f'type:user+company:"{_q(company)}"'
+    search1 = _gh_request(f"/search/users?q={q_company}&per_page=15")
+    if isinstance(search1, dict):
+        for u in search1.get("items", []):
+            lg = u.get("login")
+            if lg and lg not in logins_seen:
+                logins_seen.add(lg)
+                all_logins.append(lg)
+
+    # 4. Job keyword probe — narrows org members to those relevant to this role.
+    #    Query: org:{slug} {top_job_keywords}
+    if job_signal and all_logins:
+        kws = _job_search_keywords(job_signal, max_keywords=3)
+        if kws:
+            kw_str = "+".join(_q(k) for k in kws)
+            q_kw = f'type:user+org:{slug}+{kw_str}'
+            search2 = _gh_request(f"/search/users?q={q_kw}&per_page=10")
+            if isinstance(search2, dict):
+                for u in search2.get("items", []):
+                    lg = u.get("login")
+                    if lg and lg not in logins_seen:
+                        logins_seen.add(lg)
+                        all_logins.append(lg)
+
+    # 5. Tech-stack probe — find org members who mention specific tools from the
+    #    job's tech stack (e.g. "WebRTC", "FFmpeg", "H.265").
+    #    Optionally filtered by city when a location was extracted.
+    if tech_stack and all_logins:
+        # Pick the 2 most distinctive tech-stack terms (avoid generic ones)
+        ts_terms = [t for t in tech_stack if len(t) >= 4][:2]
+        if ts_terms:
+            ts_str = "+".join(_q(t) for t in ts_terms)
+            loc_filter = f"+location:{_q(location_city)}" if location_city else ""
+            q_ts = f'type:user+org:{slug}+{ts_str}{loc_filter}'
+            search_ts = _gh_request(f"/search/users?q={q_ts}&per_page=10")
+            if isinstance(search_ts, dict):
+                for u in search_ts.get("items", []):
+                    lg = u.get("login")
+                    if lg and lg not in logins_seen:
+                        logins_seen.add(lg)
+                        all_logins.append(lg)
+
+    # 6. Team keyword probe — search for people who mention the team name in bio.
+    #    e.g. "Video Streaming Quality" or "Platform Engineering"
+    if team and all_logins:
+        team_kw = "+".join(_q(w) for w in team.split()[:3] if len(w) >= 4)
+        if team_kw:
+            q_team = f'type:user+org:{slug}+{team_kw}'
+            search_team = _gh_request(f"/search/users?q={q_team}&per_page=10")
+            if isinstance(search_team, dict):
+                for u in search_team.get("items", []):
+                    lg = u.get("login")
+                    if lg and lg not in logins_seen:
+                        logins_seen.add(lg)
+                        all_logins.append(lg)
+
+    # 7. Last-resort fallback — global keyword search if org probes returned nothing.
+    if not all_logins and job_signal:
+        kws = _job_search_keywords(job_signal, max_keywords=2)
+        company_kw = re.sub(r"[^a-zA-Z0-9 ]+", "", company).strip().split()[0]
+        q_fallback = f'type:user+{_q(company_kw)}+{"+".join(_q(k) for k in kws)}'
+        search_fb = _gh_request(f"/search/users?q={q_fallback}&per_page=15")
+        if isinstance(search_fb, dict):
+            for u in search_fb.get("items", []):
+                lg = u.get("login")
+                if lg and lg not in logins_seen:
+                    logins_seen.add(lg)
+                    all_logins.append(lg)
+
+    if not all_logins:
+        return []
+
+    # Fetch full profiles (core API, 5000/hr limit — well within budget)
+    employees = []
+    for login in all_logins[:max_results]:
+        profile = _gh_request(f"/users/{login}")
+        if not isinstance(profile, dict):
+            continue
+        employees.append(_build_employee(login, profile, company, slug, now_str))
+
+    # Always supplement with DeepSeek AI-suggested profiles.
+    # Adds people DeepSeek knows about that didn't appear in the GitHub org,
+    # deduped by name. Capped at 10 extra so we don't bloat the list.
+    ai_emps = fetch_search_snippet_employees(
+        company,
+        job_signal=job_signal,
+        subsidiary=subsidiary,
+        tech_stack=tech_stack,
+        location_city=location_city,
+        max_results=10,
+        role=role,
+    )
+    gh_names = {e["name"].lower() for e in employees}
+    for emp in ai_emps:
+        if emp["name"].lower() not in gh_names:
+            employees.append(emp)
+            gh_names.add(emp["name"].lower())
+
+    return employees
+
+
 @app.route("/api/parse-job", methods=["POST"])
 def parse_job():
     payload = request.get_json(silent=True) or {}
-    raw_original = (payload.get("job_url") or payload.get("job_id") or "").strip()
-    raw_input = raw_original.lower()
+    job_description = (payload.get("job_description") or "").strip()
+    # Legacy fallback: still accept job_url / job_id for backward compat
+    raw_legacy = (payload.get("job_url") or payload.get("job_id") or "").strip()
+
+    # --- New path: description text provided ---
+    if job_description:
+        extracted = extract_job_with_deepseek(job_description)
+        provider = "deepseek" if extracted else None
+        if not extracted:
+            extracted = extract_job_regex_fallback(job_description)
+            provider = "regex"
+
+        selected = {
+            "id": f"job_desc_{uuid4().hex[:10]}",
+            "company":       extracted.get("company") or "Unknown company",
+            "subsidiary":    extracted.get("subsidiary") or "",
+            "team":          extracted.get("team") or "",
+            "role":          extracted.get("role") or "Unknown role",
+            "location":      extracted.get("location") or "Not listed",
+            "location_city": extracted.get("location_city") or "",
+            "level":         extracted.get("level") or "Not specified",
+            "skills":        extracted.get("skills") or [],
+            "tech_stack":    extracted.get("tech_stack") or [],
+            "description":   extracted.get("description") or job_description[:400],
+            "source_url":    "",
+            "is_live_extract": True,
+            "extraction_notes": [f"Extracted by {provider}"],
+        }
+        _upsert_job(selected)
+        confidence = 0.95 if provider == "deepseek" else 0.65
+        return jsonify({"job": selected, "source": "description", "confidence": confidence, "provider": provider})
+
+    # --- Legacy path: URL or job ID ---
+    raw_input = raw_legacy.lower()
     if not raw_input:
-        return jsonify({"error": "Add a job link or job ID to search."}), 400
+        return jsonify({"error": "Paste a job description to search."}), 400
 
     selected = None
-
     seed_jobs = [_deserialize_job(r) for r in db_query("SELECT * FROM jobs WHERE is_live_extract=0")]
     for job in seed_jobs:
         if job["company"].lower() in raw_input or job["role"].lower().split()[0] in raw_input or job["id"] in raw_input:
@@ -12288,11 +13190,11 @@ def parse_job():
             break
 
     if selected is None:
-        selected = parse_live_job(raw_original)
+        selected = parse_live_job(raw_legacy)
         _upsert_job(selected)
 
     confidence = 0.93 if selected.get("description") and not selected.get("description", "").startswith("Job details were inferred") else 0.62
-    return jsonify({"job": selected, "source": raw_original, "confidence": confidence})
+    return jsonify({"job": selected, "source": raw_legacy, "confidence": confidence})
 
 
 @app.route("/api/match", methods=["POST"])
@@ -12308,16 +13210,55 @@ def match():
     if not job:
         return jsonify({"error": "Job not found."}), 404
 
-    company_slug_key = re.sub(r"[^a-z0-9]+", "", (job.get("company") or "").lower())
-    employees = [_deserialize_employee(r) for r in
-                 db_query("SELECT * FROM employees WHERE company_slug=?", (company_slug_key,))]
+    job_signal = f"{job.get('role','')} {job.get('description','')} {' '.join(job.get('skills',[]))}"
+
+    # GitHub is the primary source — fetches org members + company search +
+    # keyword-enriched search so results are relevant to the job description.
+    source = "github"
+    job_role = job.get("role", "")
+    employees = fetch_github_employees(
+        job.get("company", ""),
+        job_signal=job_signal,
+        subsidiary=job.get("subsidiary") or "",
+        team=job.get("team") or "",
+        tech_stack=job.get("tech_stack") or [],
+        location_city=job.get("location_city") or "",
+        role=job_role,
+    ) if job.get("company") else []
+
+    # If GitHub returned nothing, DeepSeek already ran inside fetch_github_employees.
+    # For the no-GitHub case (no org found), run DeepSeek standalone.
+    if not employees:
+        employees = fetch_search_snippet_employees(
+            job.get("company", ""),
+            job_signal=job_signal,
+            subsidiary=job.get("subsidiary") or "",
+            tech_stack=job.get("tech_stack") or [],
+            location_city=job.get("location_city") or "",
+            max_results=20,
+            role=job_role,
+        )
+        source = "ai" if employees else source
+
+    # Last resort: seed database (static, demo-quality data)
+    if not employees:
+        company_slug_key = re.sub(r"[^a-z0-9]+", "", (job.get("company") or "").lower())
+        employees = [_deserialize_employee(r) for r in
+                     db_query("SELECT * FROM employees WHERE company_slug=?", (company_slug_key,))]
+        source = "seed" if employees else "none"
+
+    # Reflect mixed sources accurately
+    source_types = {e.get("_source_type", "github") for e in employees}
+    if "github" in source_types and "ai" in source_types:
+        source = "github+ai"
+    elif "ai" in source_types:
+        source = "ai"
 
     connected_ids = set()
     if user_id:
         rows = db_query("SELECT employee_id FROM user_employee_connections WHERE user_id=?", (user_id,))
         connected_ids = {r["employee_id"] for r in rows}
 
-    job_signal = f"{job.get('role','')} {job.get('description','')} {' '.join(job.get('skills',[]))}"
     user_signal = user_signal_text(user) if user else ""
 
     # Precompute user college and company sets for badge detection
@@ -12353,7 +13294,7 @@ def match():
         })
 
     ranked = sorted(results, key=lambda x: x["match_score"], reverse=True)
-    return jsonify({"job": job, "matches": ranked, "user": user})
+    return jsonify({"job": job, "matches": ranked, "user": user, "source": source})
 
 
 @app.route("/api/ai/career-companion", methods=["POST"])
@@ -12558,9 +13499,6 @@ def upload_resume():
     extracted = extract_with_deepseek(resume_text)
     provider = "deepseek" if extracted is not None else None
     if not extracted:
-        extracted = extract_with_gemini(resume_text)
-        provider = "gemini" if extracted is not None else None
-    if not extracted:
         extracted = extract_resume_regex_fallback(resume_text)
         provider = "regex"
 
@@ -12723,6 +13661,19 @@ def init_db():
         CREATE TABLE IF NOT EXISTS phone_otps (
             phone TEXT PRIMARY KEY,
             otp   TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS github_employees_cache (
+            company_slug TEXT NOT NULL,
+            login        TEXT NOT NULL,
+            name         TEXT,
+            role         TEXT,
+            bio          TEXT,
+            email        TEXT,
+            github_url   TEXT,
+            skills       TEXT DEFAULT '[]',
+            followers    INTEGER DEFAULT 0,
+            cached_at    TEXT NOT NULL,
+            PRIMARY KEY (company_slug, login)
         );
     """)
     conn.commit()

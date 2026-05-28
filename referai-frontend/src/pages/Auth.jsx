@@ -22,9 +22,10 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
     event.preventDefault();
     setError("");
     setStatus("");
-    if (!form.email.trim()) { setError("Email is required."); return; }
+    if (!form.email.trim()) { setError("Email address is required."); return; }
     if (!form.password) { setError("Password is required."); return; }
-    if (isSignup && !form.name.trim()) { setError("Name is required."); return; }
+    if (isSignup && !form.name.trim()) { setError("Full name is required."); return; }
+    if (isSignup && !form.phone.trim()) { setError("Phone number is required. We use it to verify your identity."); return; }
     setLoading(true);
     try {
       const response = isSignup ? await authSignup(form) : await authLogin(form);
@@ -100,12 +101,15 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
               )}
 
               <label className="block">
-                <span className="mb-2 block text-sm font-bold text-main">Email</span>
+                <span className="mb-2 block text-sm font-bold text-main">
+                  Email <span className="text-rose-500">*</span>
+                </span>
                 <input
                   className="field"
                   type="email"
                   value={form.email}
                   placeholder="you@example.com"
+                  required
                   onChange={(event) => setForm({ ...form, email: event.target.value })}
                 />
               </label>
@@ -135,12 +139,15 @@ const Auth = ({ mode, onSubmit, onBack, theme, onToggleTheme }) => {
                   </label>
 
                   <label className="block">
-                    <span className="mb-2 block text-sm font-bold text-main">Phone number</span>
+                    <span className="mb-2 block text-sm font-bold text-main">
+                      Phone number <span className="text-rose-500">*</span>
+                    </span>
                     <div className="flex flex-col gap-3 sm:flex-row">
                       <input
                         className="field"
                         value={form.phone}
                         placeholder="+919876543210"
+                        required
                         onChange={(event) => setForm({ ...form, phone: event.target.value })}
                       />
                       <button type="button" onClick={sendOtp} className="btn-secondary px-4 py-3 text-sm">
