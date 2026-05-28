@@ -6,6 +6,8 @@ import Landing from "./pages/Landing";
 import Profile from "./pages/Profile";
 import Student from "./pages/Student";
 
+const DARK_THEMES = new Set(["dark", "midnight", "violet"]);
+
 function App() {
   const [view, setView] = useState("landing");
   const [authMode, setAuthMode] = useState("login");
@@ -15,14 +17,16 @@ function App() {
   const [theme, setTheme] = useState(() => localStorage.getItem("referai-theme") || "light");
 
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
+    const root = document.documentElement;
+    // Remove all known theme classes then apply new one
+    root.classList.remove("light", "dark", "midnight", "violet", "sand", "forest");
+    root.classList.add(theme);
+    // Keep Tailwind's `dark` class in sync so dark: variants work
+    root.classList.toggle("dark", DARK_THEMES.has(theme));
     localStorage.setItem("referai-theme", theme);
   }, [theme]);
 
-  const openAuth = (mode) => {
-    setAuthMode(mode);
-    setView("auth");
-  };
+  const openAuth = (mode) => { setAuthMode(mode); setView("auth"); };
 
   const handleAuth = (account) => {
     setUser(account);
@@ -32,15 +36,10 @@ function App() {
 
   const handleUserUpdate = (updatedUser) => setUser(updatedUser);
 
-  const logout = () => {
-    setUser(null);
-    setView("landing");
-  };
-
-  const toggleTheme = () => setTheme((current) => (current === "dark" ? "light" : "dark"));
+  const logout = () => { setUser(null); setView("landing"); };
 
   if (view === "landing") {
-    return <Landing onAuth={openAuth} theme={theme} onToggleTheme={toggleTheme} />;
+    return <Landing onAuth={openAuth} theme={theme} onToggleTheme={() => setTheme((t) => DARK_THEMES.has(t) ? "light" : "dark")} />;
   }
 
   if (view === "auth") {
@@ -50,7 +49,7 @@ function App() {
         onSubmit={handleAuth}
         onBack={() => setView("landing")}
         theme={theme}
-        onToggleTheme={toggleTheme}
+        onToggleTheme={() => setTheme((t) => DARK_THEMES.has(t) ? "light" : "dark")}
       />
     );
   }
@@ -62,7 +61,7 @@ function App() {
       user={user}
       onLogout={logout}
       theme={theme}
-      onToggleTheme={toggleTheme}
+      onSetTheme={setTheme}
     >
       <div className={page === "opportunities" ? "" : "hidden"}>
         <Student user={user} pendingJobDesc={pendingJobDesc} onClearPendingJobDesc={() => setPendingJobDesc("")} />

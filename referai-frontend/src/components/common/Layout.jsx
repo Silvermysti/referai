@@ -2,10 +2,14 @@ import Header from "./Header";
 import Sidebar from "./Sidebar";
 
 const mobileItemsByRole = {
-  employee: [["opportunities", "Opportunities"], ["jobs", "Browse Jobs"], ["profile", "Profile"]],
+  employee: [
+    ["opportunities", "Opportunities"],
+    ["jobs",          "Browse Jobs"],
+    ["profile",       "Profile"],
+  ],
 };
 
-const Layout = ({ children, setPage, currentPage, user, onLogout, theme, onToggleTheme }) => {
+const Layout = ({ children, setPage, currentPage, user, onLogout, theme, onSetTheme }) => {
   return (
     <div className="page-bg">
       <div className="flex min-h-screen">
@@ -17,17 +21,20 @@ const Layout = ({ children, setPage, currentPage, user, onLogout, theme, onToggl
             user={user}
             onLogout={onLogout}
             theme={theme}
-            onToggleTheme={onToggleTheme}
+            onSetTheme={onSetTheme}
           />
 
-          <div className="border-b border-app bg-[var(--surface)] px-4 py-3 lg:hidden">
-            <div className="grid gap-2">
+          {/* Mobile nav */}
+          <div className="border-b border-app bg-[var(--surface)] px-4 py-2 lg:hidden">
+            <div className="flex gap-1.5 overflow-x-auto">
               {(mobileItemsByRole[user?.role] || mobileItemsByRole.employee).map(([id, label]) => (
                 <button
                   key={id}
                   onClick={() => setPage(id)}
-                  className={`rounded-lg px-3 py-2 text-xs font-black ${
-                    currentPage === id ? "bg-[var(--text)] text-[var(--bg)]" : "bg-[var(--surface-soft)] text-muted"
+                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-black transition ${
+                    currentPage === id
+                      ? "bg-[var(--primary)] text-white"
+                      : "bg-[var(--surface-soft)] text-muted hover:text-main"
                   }`}
                 >
                   {label}
