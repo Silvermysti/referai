@@ -46,7 +46,7 @@ ReferAI creates a referral marketplace where:
 Start the backend:
 
 ```bash
-cd /Users/unnatijoshi/Desktop/referai/referai-backend
+cd referai/referai-backend
 source venv/bin/activate
 pip install -r requirements.txt
 python app.py
@@ -61,7 +61,7 @@ http://127.0.0.1:5000
 Start the frontend in a second terminal:
 
 ```bash
-cd /Users/unnatijoshi/Desktop/referai/referai-frontend
+cd referai/referai-frontend
 npm install
 npm run dev
 ```
