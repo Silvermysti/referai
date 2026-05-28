@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import {
   createReferralRequest,
   generateMessage,
@@ -24,15 +24,27 @@ const Student = ({ user }) => {
   const [expandedId, setExpandedId] = useState(null);
   const [recommendations, setRecommendations] = useState([]);
   const [recsLoading, setRecsLoading] = useState(false);
+  const [recsSearched, setRecsSearched] = useState(false);
+  const [recFilters, setRecFilters] = useState({
+    role: user?.target_role || "",
+    country: "in",
+    datePosted: "month",
+    remoteOnly: false,
+  });
 
-  useEffect(() => {
+  const searchJobs = async () => {
     if (!user?.id) return;
     setRecsLoading(true);
-    getJobRecommendations(user.id)
-      .then((data) => setRecommendations(data.jobs || []))
-      .catch(() => {})
-      .finally(() => setRecsLoading(false));
-  }, [user?.id]);
+    setRecsSearched(true);
+    try {
+      const data = await getJobRecommendations({ userId: user.id, ...recFilters });
+      setRecommendations(data.jobs || []);
+    } catch {
+      setRecommendations([]);
+    } finally {
+      setRecsLoading(false);
+    }
+  };
 
   const analyzeOpportunity = async () => {
     if (!jobDescription.trim()) {
@@ -426,78 +438,143 @@ const Student = ({ user }) => {
       </section>
 
       {/* Recommended Jobs */}
-      {(recsLoading || recommendations.length > 0) && (
-        <section className="mt-8">
-          <h3 className="mb-4 text-xl font-black text-main">Recommended for you</h3>
-          {recsLoading ? (
-            <p className="text-sm text-muted">Finding jobs that match your profile…</p>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {recommendations.map((rec) => (
-                <div key={rec.job_id} className="surface-flat flex flex-col gap-3 p-4">
-                  <div className="flex items-start gap-3">
-                    {rec.company_logo ? (
-                      <img src={rec.company_logo} alt={rec.company} className="h-9 w-9 rounded object-contain" />
-                    ) : (
-                      <div className="flex h-9 w-9 items-center justify-center rounded bg-[var(--surface-soft)] text-xs font-black text-muted">
-                        {rec.company?.[0] || "?"}
-                      </div>
-                    )}
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-black text-main">{rec.title}</p>
-                      <p className="truncate text-xs text-muted">{rec.company}</p>
+      <section className="mt-10">
+        <h3 className="mb-4 text-xl font-black text-main">Recommended for you</h3>
+
+        {/* Filter bar */}
+        <div className="surface-flat mb-5 flex flex-wrap items-end gap-3 p-4">
+          <div className="flex min-w-[160px] flex-1 flex-col gap-1">
+            <label className="text-xs font-black text-muted">Role</label>
+            <input
+              className="field py-2 text-sm"
+              placeholder="e.g. Software Engineer"
+              value={recFilters.role}
+              onChange={(e) => setRecFilters((f) => ({ ...f, role: e.target.value }))}
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-black text-muted">Country</label>
+            <select
+              className="field py-2 text-sm"
+              value={recFilters.country}
+              onChange={(e) => setRecFilters((f) => ({ ...f, country: e.target.value }))}
+            >
+              <option value="in">India</option>
+              <option value="us">United States</option>
+              <option value="gb">United Kingdom</option>
+              <option value="au">Australia</option>
+              <option value="ca">Canada</option>
+              <option value="sg">Singapore</option>
+              <option value="de">Germany</option>
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-black text-muted">Posted</label>
+            <select
+              className="field py-2 text-sm"
+              value={recFilters.datePosted}
+              onChange={(e) => setRecFilters((f) => ({ ...f, datePosted: e.target.value }))}
+            >
+              <option value="today">Today</option>
+              <option value="3days">Last 3 days</option>
+              <option value="week">This week</option>
+              <option value="month">This month</option>
+              <option value="all">All time</option>
+            </select>
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-black text-muted">Work type</label>
+            <select
+              className="field py-2 text-sm"
+              value={recFilters.remoteOnly ? "remote" : "any"}
+              onChange={(e) => setRecFilters((f) => ({ ...f, remoteOnly: e.target.value === "remote" }))}
+            >
+              <option value="any">Any</option>
+              <option value="remote">Remote only</option>
+            </select>
+          </div>
+
+          <button
+            onClick={searchJobs}
+            disabled={recsLoading}
+            className="btn-primary px-6 py-2 text-sm"
+          >
+            {recsLoading ? "Searching…" : "Search jobs"}
+          </button>
+        </div>
+
+        {/* Results */}
+        {recsLoading ? (
+          <p className="text-sm text-muted">Finding jobs that match your profile…</p>
+        ) : recsSearched && recommendations.length === 0 ? (
+          <p className="text-sm text-muted">No jobs found. Try adjusting the filters.</p>
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {recommendations.map((rec) => (
+              <div key={rec.job_id} className="surface-flat flex flex-col gap-3 p-4">
+                <div className="flex items-start gap-3">
+                  {rec.company_logo ? (
+                    <img src={rec.company_logo} alt={rec.company} className="h-9 w-9 rounded object-contain" />
+                  ) : (
+                    <div className="flex h-9 w-9 items-center justify-center rounded bg-[var(--surface-soft)] text-xs font-black text-muted">
+                      {rec.company?.[0] || "?"}
                     </div>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1.5 text-xs text-muted">
-                    {rec.location && <span>📍 {rec.location}</span>}
-                    {rec.work_arrangement && <span className="capitalize">· {rec.work_arrangement}</span>}
-                    {rec.seniority && <span className="capitalize">· {rec.seniority}</span>}
-                  </div>
-
-                  {(rec.min_salary || rec.max_salary) && (
-                    <p className="text-xs font-bold text-emerald-600">
-                      ${rec.min_salary?.toLocaleString()} – ${rec.max_salary?.toLocaleString()}
-                      {rec.salary_period === "YEAR" ? "/yr" : ""}
-                    </p>
                   )}
-
-                  {rec.skills.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {rec.skills.slice(0, 5).map((s) => (
-                        <span key={s} className="rounded bg-[var(--surface-soft)] px-2 py-0.5 text-xs text-muted">{s}</span>
-                      ))}
-                    </div>
-                  )}
-
-                  <div className="mt-auto flex gap-2">
-                    <a
-                      href={rec.apply_link}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="btn-primary flex-1 py-2 text-center text-xs"
-                    >
-                      Apply
-                    </a>
-                    <button
-                      className="btn-secondary px-3 py-2 text-xs"
-                      onClick={() => {
-                        setJobDescription(
-                          `${rec.title} at ${rec.company}\n\n${rec.description}`
-                        );
-                        window.scrollTo({ top: 0, behavior: "smooth" });
-                      }}
-                    >
-                      Find referrer
-                    </button>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-black text-main">{rec.title}</p>
+                    <p className="truncate text-xs text-muted">{rec.company}</p>
                   </div>
-                  {rec.posted_at && <p className="text-[10px] text-muted">Posted {rec.posted_at}</p>}
                 </div>
-              ))}
-            </div>
-          )}
-        </section>
-      )}
+
+                <div className="flex flex-wrap gap-1.5 text-xs text-muted">
+                  {rec.location && <span>📍 {rec.location}</span>}
+                  {rec.work_arrangement && <span className="capitalize">· {rec.work_arrangement}</span>}
+                  {rec.seniority && <span className="capitalize">· {rec.seniority}</span>}
+                </div>
+
+                {(rec.min_salary || rec.max_salary) && (
+                  <p className="text-xs font-bold text-emerald-600">
+                    ${rec.min_salary?.toLocaleString()} – ${rec.max_salary?.toLocaleString()}
+                    {rec.salary_period === "YEAR" ? "/yr" : ""}
+                  </p>
+                )}
+
+                {rec.skills.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {rec.skills.slice(0, 5).map((s) => (
+                      <span key={s} className="rounded bg-[var(--surface-soft)] px-2 py-0.5 text-xs text-muted">{s}</span>
+                    ))}
+                  </div>
+                )}
+
+                <div className="mt-auto flex gap-2">
+                  <a
+                    href={rec.apply_link}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="btn-primary flex-1 py-2 text-center text-xs"
+                  >
+                    Apply
+                  </a>
+                  <button
+                    className="btn-secondary px-3 py-2 text-xs"
+                    onClick={() => {
+                      setJobDescription(`${rec.title} at ${rec.company}\n\n${rec.description}`);
+                      window.scrollTo({ top: 0, behavior: "smooth" });
+                    }}
+                  >
+                    Find referrer
+                  </button>
+                </div>
+                {rec.posted_at && <p className="text-[10px] text-muted">Posted {rec.posted_at}</p>}
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
     </div>
   );
 };

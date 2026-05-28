@@ -13363,31 +13363,34 @@ def update_profile():
     return jsonify({"user": find_user(user_id)})
 
 
-def fetch_job_recommendations(user, num_results=10):
+def fetch_job_recommendations(user, num_results=10, country="in", date_posted="month",
+                              remote_only=False, role_override=""):
     """Search JSearch for jobs matching a user's target role, skills, and company interests."""
     if not RAPIDAPI_KEY:
         return []
 
-    target_role = (user.get("target_role") or user.get("current_role") or "").strip()
+    target_role = role_override or (user.get("target_role") or user.get("current_role") or "").strip()
     skills = jl(user.get("skills", "[]"))[:3]
     target_companies = jl(user.get("target_companies", "[]"))
 
     if not target_role:
         return []
 
-    # Build query: "software engineer python react" or "software engineer at Google"
     skill_hint = " ".join(skills[:2]) if skills else ""
     company_hint = f"at {target_companies[0]}" if target_companies else ""
     query = " ".join(filter(None, [target_role, skill_hint, company_hint]))
 
-    params = urllib.parse.urlencode({
-        "query": query,
-        "page": "1",
-        "num_pages": "1",
-        "country": "in",       # India — change to "us" for US results
-        "language": "en",
-        "date_posted": "month",
-    })
+    p = {
+        "query":      query,
+        "page":       "1",
+        "num_pages":  "1",
+        "country":    country,
+        "language":   "en",
+        "date_posted": date_posted,
+    }
+    if remote_only:
+        p["remote_jobs_only"] = "true"
+    params = urlencode(p)
     req = Request(
         f"{JSEARCH_URL}?{params}",
         headers={
@@ -13435,8 +13438,20 @@ def job_recommendations():
         return jsonify({"error": "User not found"}), 404
     if not RAPIDAPI_KEY:
         return jsonify({"jobs": [], "notice": "RAPIDAPI_KEY not configured"}), 200
-    jobs = fetch_job_recommendations(user)
-    return jsonify({"jobs": jobs, "query_role": user.get("target_role") or user.get("current_role")})
+
+    country     = request.args.get("country", "in")
+    date_posted = request.args.get("date_posted", "month")
+    remote_only = request.args.get("remote_only", "false").lower() == "true"
+    role        = request.args.get("role", "").strip()
+
+    jobs = fetch_job_recommendations(
+        user,
+        country=country,
+        date_posted=date_posted,
+        remote_only=remote_only,
+        role_override=role,
+    )
+    return jsonify({"jobs": jobs, "query_role": role or user.get("target_role") or user.get("current_role")})
 
 
 def hydrate_requests():
