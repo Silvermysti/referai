@@ -9,6 +9,9 @@ import {
 } from "../services/api";
 
 const Student = ({ user }) => {
+  const [tab, setTab] = useState("referrers");
+
+  // --- Find Referrers tab ---
   const [jobDescription, setJobDescription] = useState("");
   const [job, setJob] = useState(null);
   const [matches, setMatches] = useState([]);
@@ -22,6 +25,8 @@ const Student = ({ user }) => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState(null);
+
+  // --- Browse Jobs tab ---
   const [recommendations, setRecommendations] = useState([]);
   const [recsLoading, setRecsLoading] = useState(false);
   const [recsSearched, setRecsSearched] = useState(false);
@@ -31,6 +36,14 @@ const Student = ({ user }) => {
     datePosted: "month",
     remoteOnly: false,
   });
+
+  const currentYear = new Date().getFullYear();
+  const userSkillsLower = new Set((user?.skills || []).map((s) => s.toLowerCase()));
+  const jobMatchPct = (jobSkills) => {
+    if (!jobSkills?.length) return null;
+    const hits = jobSkills.filter((s) => userSkillsLower.has(s.toLowerCase())).length;
+    return Math.round((hits / jobSkills.length) * 100);
+  };
 
   const searchJobs = async () => {
     if (!user?.id) return;
@@ -125,6 +138,28 @@ const Student = ({ user }) => {
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 md:px-8">
+
+      {/* Tab bar */}
+      <div className="mb-8 flex gap-1 border-b border-app">
+        {[
+          { id: "referrers", label: "Find Referrers" },
+          { id: "jobs",      label: "Browse Jobs" },
+        ].map(({ id, label }) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            className={`px-5 py-2.5 text-sm font-black transition-colors ${
+              tab === id
+                ? "border-b-2 border-[var(--primary)] text-[var(--primary)]"
+                : "text-muted hover:text-main"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === "referrers" && (
       <section className="mb-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(420px,0.75fr)]">
         <div>
           <h2 className="text-3xl font-black tracking-tight text-main md:text-5xl">Find the right referrer.</h2>
@@ -201,11 +236,9 @@ const Student = ({ user }) => {
             </div>
           )}
           {matches.map((employee) => {
-            const currentYear = new Date().getFullYear();
             const isStudent = (employee.education || []).some(
               (e) => e.graduation_year && parseInt(e.graduation_year) > currentYear
             );
-            const userSkillsLower = new Set((user?.skills || []).map((s) => s.toLowerCase()));
             const commonSkills = (employee.skills || []).filter((s) => userSkillsLower.has(s.toLowerCase()));
             const isExpanded = expandedId === employee.id;
 
@@ -436,11 +469,10 @@ const Student = ({ user }) => {
           </div>
         ) : null}
       </section>
+      )}
 
-      {/* Recommended Jobs */}
-      <section className="mt-10">
-        <h3 className="mb-4 text-xl font-black text-main">Recommended for you</h3>
-
+      {tab === "jobs" && (
+      <section>
         {/* Filter bar */}
         <div className="surface-flat mb-5 flex flex-wrap items-end gap-3 p-4">
           <div className="flex min-w-[160px] flex-1 flex-col gap-1">
@@ -515,18 +547,26 @@ const Student = ({ user }) => {
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {recommendations.map((rec) => (
               <div key={rec.job_id} className="surface-flat flex flex-col gap-3 p-4">
-                <div className="flex items-start gap-3">
-                  {rec.company_logo ? (
-                    <img src={rec.company_logo} alt={rec.company} className="h-9 w-9 rounded object-contain" />
-                  ) : (
-                    <div className="flex h-9 w-9 items-center justify-center rounded bg-[var(--surface-soft)] text-xs font-black text-muted">
-                      {rec.company?.[0] || "?"}
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex min-w-0 items-start gap-3">
+                    {rec.company_logo ? (
+                      <img src={rec.company_logo} alt={rec.company} className="h-9 w-9 shrink-0 rounded object-contain" />
+                    ) : (
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded bg-[var(--surface-soft)] text-xs font-black text-muted">
+                        {rec.company?.[0] || "?"}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-main">{rec.title}</p>
+                      <p className="truncate text-xs text-muted">{rec.company}</p>
+                    </div>
+                  </div>
+                  {jobMatchPct(rec.skills) !== null && (
+                    <div className="shrink-0 rounded-lg bg-[rgb(33_85_217_/_0.12)] px-2.5 py-1.5 text-center">
+                      <p className="text-[10px] font-bold text-[var(--primary)]">Match</p>
+                      <p className="text-lg font-black leading-none text-[var(--primary-strong)]">{jobMatchPct(rec.skills)}%</p>
                     </div>
                   )}
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-black text-main">{rec.title}</p>
-                    <p className="truncate text-xs text-muted">{rec.company}</p>
-                  </div>
                 </div>
 
                 <div className="flex flex-wrap gap-1.5 text-xs text-muted">
@@ -563,6 +603,7 @@ const Student = ({ user }) => {
                     className="btn-secondary px-3 py-2 text-xs"
                     onClick={() => {
                       setJobDescription(`${rec.title} at ${rec.company}\n\n${rec.description}`);
+                      setTab("referrers");
                       window.scrollTo({ top: 0, behavior: "smooth" });
                     }}
                   >
@@ -575,6 +616,8 @@ const Student = ({ user }) => {
           </div>
         )}
       </section>
+      )}
+
     </div>
   );
 };
