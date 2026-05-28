@@ -5,7 +5,7 @@ import re
 import sqlite3
 from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import quote, unquote, urlencode, urlparse
 from urllib.request import Request, urlopen
 from uuid import uuid4
 
@@ -11135,6 +11135,9 @@ DEEPSEEK_MODEL = "deepseek-chat"
 GITHUB_PAT = os.environ.get("GITHUB_PAT", "")
 GITHUB_API = "https://api.github.com"
 
+RAPIDAPI_KEY = os.environ.get("RAPIDAPI_KEY", "")
+JSEARCH_URL = "https://jsearch.p.rapidapi.com/search"
+
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "referai.db")
 
 
@@ -13358,6 +13361,82 @@ def update_profile():
         ),
     )
     return jsonify({"user": find_user(user_id)})
+
+
+def fetch_job_recommendations(user, num_results=10):
+    """Search JSearch for jobs matching a user's target role, skills, and company interests."""
+    if not RAPIDAPI_KEY:
+        return []
+
+    target_role = (user.get("target_role") or user.get("current_role") or "").strip()
+    skills = jl(user.get("skills", "[]"))[:3]
+    target_companies = jl(user.get("target_companies", "[]"))
+
+    if not target_role:
+        return []
+
+    # Build query: "software engineer python react" or "software engineer at Google"
+    skill_hint = " ".join(skills[:2]) if skills else ""
+    company_hint = f"at {target_companies[0]}" if target_companies else ""
+    query = " ".join(filter(None, [target_role, skill_hint, company_hint]))
+
+    params = urllib.parse.urlencode({
+        "query": query,
+        "page": "1",
+        "num_pages": "1",
+        "country": "in",       # India — change to "us" for US results
+        "language": "en",
+        "date_posted": "month",
+    })
+    req = Request(
+        f"{JSEARCH_URL}?{params}",
+        headers={
+            "X-RapidAPI-Key": RAPIDAPI_KEY,
+            "X-RapidAPI-Host": "jsearch.p.rapidapi.com",
+        },
+    )
+    try:
+        with urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        raw_jobs = data.get("data") or []
+    except Exception:
+        return []
+
+    results = []
+    for jr in raw_jobs[:num_results]:
+        results.append({
+            "job_id":          jr.get("job_id", ""),
+            "title":           jr.get("job_title", ""),
+            "company":         jr.get("employer_name", ""),
+            "company_logo":    jr.get("employer_logo", ""),
+            "location":        jr.get("job_location") or jr.get("job_city") or "",
+            "employment_type": jr.get("job_employment_type", ""),
+            "work_arrangement":jr.get("work_arrangement", ""),
+            "apply_link":      jr.get("job_apply_link", ""),
+            "posted_at":       jr.get("job_posted_at", ""),
+            "min_salary":      jr.get("job_min_salary"),
+            "max_salary":      jr.get("job_max_salary"),
+            "salary_period":   jr.get("job_salary_period", ""),
+            "skills":          list(jr.get("preferred_technologies") or []),
+            "seniority":       jr.get("seniority_level", ""),
+            "description":     (jr.get("job_description") or "")[:400],
+            "highlights":      jr.get("job_highlights") or {},
+        })
+    return results
+
+
+@app.route("/api/jobs/recommendations", methods=["GET"])
+def job_recommendations():
+    user_id = request.args.get("user_id")
+    if not user_id:
+        return jsonify({"error": "user_id required"}), 400
+    user = find_user(user_id)
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    if not RAPIDAPI_KEY:
+        return jsonify({"jobs": [], "notice": "RAPIDAPI_KEY not configured"}), 200
+    jobs = fetch_job_recommendations(user)
+    return jsonify({"jobs": jobs, "query_role": user.get("target_role") or user.get("current_role")})
 
 
 def hydrate_requests():

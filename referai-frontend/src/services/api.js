@@ -91,6 +91,9 @@ export const uploadResume = (file) => {
     });
 };
 
+export const getJobRecommendations = (userId) =>
+  request(`/api/jobs/recommendations?user_id=${encodeURIComponent(userId)}`);
+
 export const updateProfile = ({ userId, skills, education, experience, interests, targetCompanies, currentRole, targetRole, summary }) =>
   request("/api/profile", {
     method: "PUT",

@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   createReferralRequest,
   generateMessage,
   getCareerCompanion,
+  getJobRecommendations,
   getMatches,
   parseJob,
 } from "../services/api";
@@ -21,6 +22,17 @@ const Student = ({ user }) => {
   const [detailLoading, setDetailLoading] = useState(false);
   const [error, setError] = useState("");
   const [expandedId, setExpandedId] = useState(null);
+  const [recommendations, setRecommendations] = useState([]);
+  const [recsLoading, setRecsLoading] = useState(false);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    setRecsLoading(true);
+    getJobRecommendations(user.id)
+      .then((data) => setRecommendations(data.jobs || []))
+      .catch(() => {})
+      .finally(() => setRecsLoading(false));
+  }, [user?.id]);
 
   const analyzeOpportunity = async () => {
     if (!jobDescription.trim()) {
@@ -412,6 +424,80 @@ const Student = ({ user }) => {
           </div>
         ) : null}
       </section>
+
+      {/* Recommended Jobs */}
+      {(recsLoading || recommendations.length > 0) && (
+        <section className="mt-8">
+          <h3 className="mb-4 text-xl font-black text-main">Recommended for you</h3>
+          {recsLoading ? (
+            <p className="text-sm text-muted">Finding jobs that match your profile…</p>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {recommendations.map((rec) => (
+                <div key={rec.job_id} className="surface-flat flex flex-col gap-3 p-4">
+                  <div className="flex items-start gap-3">
+                    {rec.company_logo ? (
+                      <img src={rec.company_logo} alt={rec.company} className="h-9 w-9 rounded object-contain" />
+                    ) : (
+                      <div className="flex h-9 w-9 items-center justify-center rounded bg-[var(--surface-soft)] text-xs font-black text-muted">
+                        {rec.company?.[0] || "?"}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-black text-main">{rec.title}</p>
+                      <p className="truncate text-xs text-muted">{rec.company}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap gap-1.5 text-xs text-muted">
+                    {rec.location && <span>📍 {rec.location}</span>}
+                    {rec.work_arrangement && <span className="capitalize">· {rec.work_arrangement}</span>}
+                    {rec.seniority && <span className="capitalize">· {rec.seniority}</span>}
+                  </div>
+
+                  {(rec.min_salary || rec.max_salary) && (
+                    <p className="text-xs font-bold text-emerald-600">
+                      ${rec.min_salary?.toLocaleString()} – ${rec.max_salary?.toLocaleString()}
+                      {rec.salary_period === "YEAR" ? "/yr" : ""}
+                    </p>
+                  )}
+
+                  {rec.skills.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {rec.skills.slice(0, 5).map((s) => (
+                        <span key={s} className="rounded bg-[var(--surface-soft)] px-2 py-0.5 text-xs text-muted">{s}</span>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="mt-auto flex gap-2">
+                    <a
+                      href={rec.apply_link}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="btn-primary flex-1 py-2 text-center text-xs"
+                    >
+                      Apply
+                    </a>
+                    <button
+                      className="btn-secondary px-3 py-2 text-xs"
+                      onClick={() => {
+                        setJobDescription(
+                          `${rec.title} at ${rec.company}\n\n${rec.description}`
+                        );
+                        window.scrollTo({ top: 0, behavior: "smooth" });
+                      }}
+                    >
+                      Find referrer
+                    </button>
+                  </div>
+                  {rec.posted_at && <p className="text-[10px] text-muted">Posted {rec.posted_at}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 };
